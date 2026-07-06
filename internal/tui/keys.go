@@ -206,6 +206,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "i":
+		if !m.showDiff && !m.done && m.run != nil {
+			existing := ""
+			if m.run.Intent != nil {
+				existing = *m.run.Intent
+			}
+			m.editor = newIntentEditor(existing)
+		}
+		return m, nil
+
 	case "y":
 		m.yoloMode = !m.yoloMode
 		if m.yoloMode {

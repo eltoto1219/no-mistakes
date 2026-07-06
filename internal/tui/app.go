@@ -232,6 +232,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.startSpinnerIfNeeded()
 
+	case intentSavedMsg:
+		if m.run != nil {
+			intent := msg.intent
+			m.run.Intent = &intent
+		}
+		return m, nil
+
 	case errMsg:
 		m.err = msg.err
 		return m, nil

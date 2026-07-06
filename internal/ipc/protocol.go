@@ -201,6 +201,9 @@ type RunInfo struct {
 	Status  types.RunStatus `json:"status"`
 	PRURL   *string         `json:"pr_url,omitempty"`
 	Error   *string         `json:"error,omitempty"`
+	// Intent is the run's current intent (agent-supplied, inferred by the
+	// intent step, or edited via set_intent), so UIs can show and edit it.
+	Intent *string `json:"intent,omitempty"`
 	// AwaitingAgent is true while the run is parked at a gate awaiting the
 	// driving agent's response. AwaitingAgentSince is the unix-seconds time it
 	// parked, so a supervisor can read "parked for N seconds" in one call. Both

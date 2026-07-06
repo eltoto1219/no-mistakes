@@ -156,6 +156,7 @@ When yolo mode is on, the footer changes from `y yolo` to `y end yolo`.
 | `f` | Fix - send selected findings to agent for fixing |
 | `s` | Skip - skip this step and continue |
 | `x` | Abort - press twice to confirm (first press shows warning) |
+| `i` | View or edit the run's intent (any time while the run is active) |
 | `o` | Open PR URL in browser (when available) |
 
 ### Selection
@@ -170,6 +171,10 @@ When yolo mode is on, the footer changes from `y yolo` to `y end yolo`.
 | `D` | Delete the current user-authored finding |
 
 When the instruction editor is open, press `Ctrl+s` or `Ctrl+enter` to save, or `esc` to cancel. In the add-finding editor, use `tab` / `shift+tab` to move between fields, `Ctrl+s` to save, and `esc` to cancel.
+
+The intent editor (`i`) works the same way: it opens prefilled with the run's current intent (supplied at run start or inferred by the intent step), and saving with `Ctrl+s` replaces it on the active run.
+Steps that have not executed yet, and fix rounds of a step parked at a gate, use the edited intent in their prompts.
+Edits are only accepted while the run is active.
 
 ### View
 

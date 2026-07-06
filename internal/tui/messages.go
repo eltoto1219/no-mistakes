@@ -29,6 +29,10 @@ type rerunErrMsg struct {
 	requestID uint64
 }
 
+// intentSavedMsg confirms the daemon accepted an intent edit; the model
+// adopts the new text (run events do not carry intent).
+type intentSavedMsg struct{ intent string }
+
 type spinnerTickMsg struct{}
 
 // connectedMsg signals that the event subscription is ready.

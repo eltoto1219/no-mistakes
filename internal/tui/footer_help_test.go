@@ -80,3 +80,19 @@ func TestModel_View_FooterNeverShowsHelpWhenHelpVisible(t *testing.T) {
 		}
 	}
 }
+
+func TestModel_View_FooterShowsIntentKeyWhileRunning(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.Ascii)
+	m := NewModel("", nil, testRun())
+	m.width = 100
+	m.height = 40
+
+	if plain := stripANSI(m.View()); !strings.Contains(plain, "i intent") {
+		t.Errorf("footer should show 'i intent' while the run is active, got:\n%s", plain)
+	}
+
+	m.done = true
+	if plain := stripANSI(m.View()); strings.Contains(plain, "i intent") {
+		t.Errorf("footer must not show 'i intent' after the run finished, got:\n%s", plain)
+	}
+}

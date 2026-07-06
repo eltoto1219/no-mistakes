@@ -381,6 +381,7 @@ func renderHelpOverlay(width int, run *ipc.RunInfo, hasAwaitingStep bool, showDi
 			{"a", "approve"},
 			{"f", "fix"},
 			{"s", "skip"},
+			{"i", "view/edit run intent"},
 			{"x x", "abort (press twice)"},
 		}
 		if hasDiff {

@@ -145,6 +145,22 @@ func (m Model) respondCmd(action types.ApprovalAction) tea.Cmd {
 	}
 }
 
+// setIntentCmd replaces the active run's intent via the daemon. Later steps
+// (and fix rounds of a currently parked step) use the edited intent in their
+// prompts; the daemon rejects edits once the run is terminal.
+func (m Model) setIntentCmd(text string) tea.Cmd {
+	if m.runID == "" || m.client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		var result ipc.SetIntentResult
+		if err := m.client.Call(ipc.MethodSetIntent, &ipc.SetIntentParams{RunID: m.runID, Intent: text}, &result); err != nil {
+			return errMsg{fmt.Errorf("set intent: %w", err)}
+		}
+		return intentSavedMsg{intent: text}
+	}
+}
+
 func (m Model) cancelRunCmd() tea.Cmd {
 	if m.runID == "" {
 		return nil
