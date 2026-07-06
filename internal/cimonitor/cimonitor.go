@@ -31,7 +31,7 @@ const (
 type Activity struct {
 	CIFixes    int    // number of auto-fix attempts observed
 	AutoFixing bool   // an auto-fix is currently in progress
-	Ready      bool   // checks have passed; the PR is ready for a human to merge
+	Ready      bool   // checks passed or none are configured; the PR is ready for a human to merge
 	LastEvent  string // the most recent recognized log line
 }
 
@@ -89,8 +89,9 @@ func ParseActivity(logs []string) Activity {
 	return a
 }
 
-// ChecksPassed reports whether the CI monitor's latest state is "checks passed,
-// PR ready to merge". It is the agent-facing summary of ParseActivity(logs).Ready.
+// ChecksPassed reports whether the CI monitor's latest state is "checks passed
+// or none configured, PR ready to merge". It is the agent-facing summary of
+// ParseActivity(logs).Ready.
 func ChecksPassed(logs []string) bool {
 	return ParseActivity(logs).Ready
 }

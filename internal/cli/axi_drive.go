@@ -269,7 +269,8 @@ func rerunParams(repoID, branch string, skipSteps []types.StepName, intent strin
 }
 
 // driveRun polls a run until it reaches an approval gate, a terminal state, or
-// CI checks pass, streaming step transitions to progress (stderr). When
+// CI checks are ready (passed or none configured), streaming step transitions
+// to progress (stderr). When
 // autoApprove is set it resolves each gate and continues; otherwise it returns
 // at the first gate so the caller can surface it for a human/agent decision.
 //
@@ -282,8 +283,9 @@ func rerunParams(repoID, branch string, skipSteps []types.StepName, intent strin
 // The CI step monitors an open PR until a human merges or closes it (a live
 // status the TUI shows), so it never reaches a terminal state on its own. An
 // agent driving the run must not block on that human action, so once CI checks
-// pass driveRun returns with ciReady=true: the change is validated and the PR is
-// ready for a human to merge. The daemon keeps monitoring in the background.
+// pass or none are configured, driveRun returns with ciReady=true: the change is
+// validated and the PR is ready for a human to merge. The daemon keeps
+// monitoring in the background.
 // readCILog reads the CI step's log lines for runID; it may be nil (no early
 // stop) and returns nil when no log exists yet.
 func driveRun(ctx context.Context, progress io.Writer, client *ipc.Client, runID string, autoApprove bool, readCILog func(string) []string) (run *ipc.RunInfo, ciReady bool, err error) {
