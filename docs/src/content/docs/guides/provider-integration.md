@@ -65,11 +65,13 @@ gh auth status
 
 `no-mistakes doctor` also checks for `gh` availability.
 For PR and workflow-run commands, no-mistakes passes the repository slug from the recorded upstream remote or PR URL to `gh`, so daemon-run commands do not depend on the daemon's current working directory.
+When `gh` predates v2.46 and does not support `gh pr checks --json`, no-mistakes falls back to GitHub's REST endpoints for check runs and commit statuses, including completion times used to recognize reruns.
 
 **What you get:**
 
 - PR creation and update on pushes
 - CI check polling with exponential backoff (30s → 60s → 120s) until the PR is merged, closed, or the configured `ci_timeout` idle window elapses
+- Empty GitHub check results are accepted after the 60s registration grace period, so repositories with no configured checks become ready instead of remaining stuck in CI polling
 - Failed job log fetching (`gh run view --log-failed`) for the CI auto-fix step
 - PR mergeability polling, and agent-driven resolution when the provider reports an actual merge conflict
 

@@ -2,10 +2,12 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -119,6 +121,12 @@ func (h *Host) headRef(branch string) string {
 		return branch
 	}
 	return h.forkOwner + ":" + branch
+}
+
+// isJSONArray reports whether b is a valid JSON array (possibly empty).
+func isJSONArray(b []byte) bool {
+	var probe []json.RawMessage
+	return json.Unmarshal(b, &probe) == nil && probe != nil
 }
 
 func repoOwner(slug string) string {
@@ -265,12 +273,25 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 	args := append([]string{"pr", "checks", pr.Number}, h.repoArgs()...)
 	args = append(args, "--json", "name,state,bucket,completedAt")
 	cmd := h.cmd(ctx, "gh", args...)
-	out, err := cmd.CombinedOutput()
+	out, err := cmd.Output()
 	if err != nil {
-		if strings.Contains(string(out), "no checks reported") {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || (exitErr.ExitCode() != 1 && exitErr.ExitCode() != 8) {
+			return nil, fmt.Errorf("gh pr checks: %w", err)
+		}
+		if isUnsupportedJSONFlagError(exitErr.Stderr) {
+			return h.getChecksLegacy(ctx, pr)
+		}
+		diagnostic := string(out) + string(exitErr.Stderr)
+		if strings.Contains(diagnostic, "no checks reported") {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("gh pr checks: %w", err)
+		if !isJSONArray(out) {
+			return nil, fmt.Errorf("gh pr checks: %w", err)
+		}
 	}
 	var raw []struct {
 		Name        string `json:"name"`
@@ -290,6 +311,228 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 			}
 		}
 		checks = append(checks, scm.Check{Name: r.Name, Bucket: normalizeCheckBucket(r.Bucket, r.State), CompletedAt: completedAt})
+	}
+	return checks, nil
+}
+
+// isUnsupportedJSONFlagError reports whether stderr indicates the installed gh
+// CLI predates v2.46, where `pr checks` gained the --json flag.
+func isUnsupportedJSONFlagError(stderr []byte) bool {
+	msg := strings.ToLower(string(stderr))
+	return strings.Contains(msg, "unknown flag") && strings.Contains(msg, "--json")
+}
+
+// getChecksLegacy reads checks through structured REST endpoints for gh CLIs
+// older than v2.46. Unscoped hosts retain the tab-separated fallback used by
+// legacy callers that do not provide a repository slug.
+func (h *Host) getChecksLegacy(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
+	if h.repo != "" {
+		return h.getChecksLegacyStructured(ctx, pr)
+	}
+
+	args := append([]string{"pr", "checks", pr.Number}, h.repoArgs()...)
+	cmd := h.cmd(ctx, "gh", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || (exitErr.ExitCode() != 1 && exitErr.ExitCode() != 8) {
+			return nil, fmt.Errorf("gh pr checks: %w", err)
+		}
+		if strings.Contains(string(out)+string(exitErr.Stderr), "no checks reported") {
+			return nil, nil
+		}
+		// Exits 1 (failures) and 8 (pending) still print the check table on
+		// stdout; fall through and parse it. Anything unparseable fails below.
+	}
+	checks, parseErr := parseChecksTSV(out)
+	if parseErr != nil || (err != nil && len(checks) == 0) {
+		// Fail closed: a nonzero exit without a recognized diagnostic or a
+		// parseable check table is a command failure, not an empty result.
+		if err != nil {
+			return nil, fmt.Errorf("gh pr checks: %w", err)
+		}
+		return nil, parseErr
+	}
+	return checks, nil
+}
+
+type legacyCheckRun struct {
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Conclusion  string `json:"conclusion"`
+	CompletedAt string `json:"completed_at"`
+}
+
+type legacyCommitStatus struct {
+	Context   string `json:"context"`
+	State     string `json:"state"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func (h *Host) getChecksLegacyStructured(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
+	headArgs := append([]string{"pr", "view", pr.Number}, h.repoArgs()...)
+	headArgs = append(headArgs, "--json", "headRefOid")
+	headOut, err := h.cmd(ctx, "gh", headArgs...).Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf("gh pr view head: %w", err)
+	}
+	var head struct {
+		OID string `json:"headRefOid"`
+	}
+	if err := json.Unmarshal(headOut, &head); err != nil {
+		return nil, fmt.Errorf("parse PR head: %w", err)
+	}
+	head.OID = strings.TrimSpace(head.OID)
+	if head.OID == "" {
+		return nil, errors.New("parse PR head: empty headRefOid")
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/commits/%s/check-runs", h.apiRepoSlug(), head.OID)
+	runsOut, err := h.cmd(ctx, "gh", h.apiArgs(endpoint, "--paginate")...).Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf("gh api check-runs: %w", err)
+	}
+	runs, err := decodeLegacyCheckRuns(runsOut)
+	if err != nil {
+		return nil, err
+	}
+
+	endpoint = fmt.Sprintf("repos/%s/commits/%s/status", h.apiRepoSlug(), head.OID)
+	statusOut, err := h.cmd(ctx, "gh", h.apiArgs(endpoint, "--paginate")...).Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf("gh api commit status: %w", err)
+	}
+	statuses, err := decodeLegacyCommitStatuses(statusOut)
+	if err != nil {
+		return nil, err
+	}
+
+	checks := make([]scm.Check, 0, len(runs)+len(statuses))
+	for _, run := range runs {
+		checks = append(checks, scm.Check{
+			Name:        run.Name,
+			Bucket:      legacyCheckRunBucket(run.Status, run.Conclusion),
+			CompletedAt: parseGitHubTime(run.CompletedAt),
+		})
+	}
+	for _, status := range statuses {
+		checks = append(checks, scm.Check{
+			Name:        status.Context,
+			Bucket:      normalizeCheckBucket("", status.State),
+			CompletedAt: parseGitHubTime(status.UpdatedAt),
+		})
+	}
+	return checks, nil
+}
+
+func (h *Host) apiRepoSlug() string {
+	repo := strings.TrimSpace(h.repo)
+	if h.host != "" {
+		repo = strings.TrimPrefix(repo, strings.TrimSpace(h.host)+"/")
+	}
+	return repo
+}
+
+func (h *Host) apiArgs(endpoint string, extra ...string) []string {
+	args := []string{"api"}
+	if h.host != "" && !strings.EqualFold(h.host, "github.com") {
+		args = append(args, "--hostname", h.host)
+	}
+	args = append(args, endpoint)
+	return append(args, extra...)
+}
+
+func decodeLegacyCheckRuns(out []byte) ([]legacyCheckRun, error) {
+	return decodeLegacyPages[legacyCheckRun](out, "check_runs", "check-runs")
+}
+
+func decodeLegacyCommitStatuses(out []byte) ([]legacyCommitStatus, error) {
+	return decodeLegacyPages[legacyCommitStatus](out, "statuses", "commit statuses")
+}
+
+func decodeLegacyPages[T any](out []byte, field, label string) ([]T, error) {
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	var values []T
+	seenPayload := false
+	for {
+		var payload map[string]json.RawMessage
+		err := decoder.Decode(&payload)
+		if errors.Is(err, io.EOF) {
+			if !seenPayload {
+				return nil, fmt.Errorf("parse %s: empty response", label)
+			}
+			return values, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", label, err)
+		}
+		raw, ok := payload[field]
+		if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, fmt.Errorf("parse %s: missing %s array", label, field)
+		}
+		var page []T
+		if err := json.Unmarshal(raw, &page); err != nil || page == nil {
+			if err == nil {
+				err = errors.New("expected array")
+			}
+			return nil, fmt.Errorf("parse %s: invalid %s: %w", label, field, err)
+		}
+		seenPayload = true
+		values = append(values, page...)
+	}
+}
+
+func legacyCheckRunBucket(status, conclusion string) scm.CheckBucket {
+	if !strings.EqualFold(strings.TrimSpace(status), "completed") {
+		return scm.CheckBucketPending
+	}
+	if bucket := normalizeCheckBucket("", conclusion); bucket != "" {
+		return bucket
+	}
+	return scm.CheckBucketPending
+}
+
+func parseGitHubTime(raw string) time.Time {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+// parseChecksTSV parses the plain `gh pr checks` table: one check per line,
+// tab-separated, with the name in column 1 and the bucket word (pass, fail,
+// pending, skipping, cancel) in column 2.
+func parseChecksTSV(out []byte) ([]scm.Check, error) {
+	checks := []scm.Check{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("gh pr checks: unexpected output line %q", line)
+		}
+		bucket := scm.CheckBucket(strings.TrimSpace(fields[1]))
+		switch bucket {
+		case scm.CheckBucketPass, scm.CheckBucketFail, scm.CheckBucketPending, scm.CheckBucketCancel, scm.CheckBucketSkip:
+		default:
+			return nil, fmt.Errorf("gh pr checks: unexpected check state %q in line %q", fields[1], line)
+		}
+		checks = append(checks, scm.Check{Name: strings.TrimSpace(fields[0]), Bucket: bucket})
 	}
 	return checks, nil
 }

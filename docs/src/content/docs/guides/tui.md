@@ -128,7 +128,7 @@ On narrow terminals, the log panel expands to fill the remaining vertical space 
 While the CI step is active, the TUI shows a dedicated CI panel instead of the generic findings view.
 It shows the PR label, the latest CI activity, and a log tail.
 When a real CI auto-fix attempt starts, the panel increments `CI auto-fixes: N`.
-Once checks are green and known mergeability is clear, the panel shows `✓ Checks passed` with `still monitoring until merged or closed`, and the terminal title switches to `Checks passed`.
+Once known mergeability is clear and either checks are green or the 60-second registration grace period confirms that none are configured, the panel shows `✓ Checks passed` with `still monitoring until merged or closed`, and the terminal title switches to `Checks passed`.
 That text means the CI monitor is still active; it can still pause later if the configured idle timeout elapses with no base-branch movement.
 That ready signal clears if checks start running again, new failures appear, provider state becomes uncertain, or the PR is merged or closed.
 

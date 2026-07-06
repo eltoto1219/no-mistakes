@@ -2,10 +2,12 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +165,377 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	}
 	if updated != pr {
 		t.Fatalf("UpdatePR() = %+v, want original PR", updated)
+	}
+}
+
+func TestGetChecksReturnsEmptyWhenNoChecksRegistered(t *testing.T) {
+	t.Parallel()
+
+	// gh pr checks --json exits 1 with an empty JSON array on stdout when no
+	// CI checks are registered on the PR. This must not be treated as an error
+	// so the CI step can detect "no checks" and exit rather than stalling.
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stdout: "[]\n",
+			code:   1,
+		},
+	}), nil, "", "")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v, want nil for empty checks list", err)
+	}
+	if len(checks) != 0 {
+		t.Fatalf("len(checks) = %d, want 0", len(checks))
+	}
+}
+
+func TestGetChecksReturnsChecksOnNonZeroExitWithFailures(t *testing.T) {
+	t.Parallel()
+
+	// gh pr checks --json exits 1 when checks are present but some have failed.
+	// The JSON array on stdout should still be parsed and returned.
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stdout: `[{"name":"build","state":"FAILURE","bucket":"fail"}]` + "\n",
+			stderr: "some checks did not pass\n",
+			code:   1,
+		},
+	}), nil, "", "")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v, want nil", err)
+	}
+	if len(checks) != 1 || checks[0].Name != "build" || checks[0].Bucket != scm.CheckBucketFail {
+		t.Fatalf("checks = %+v, want single failing build check", checks)
+	}
+}
+
+func TestGetChecksReturnsPendingChecksOnExitEight(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stdout: `[{"name":"build","state":"PENDING","bucket":"pending"}]` + "\n",
+			code:   8,
+		},
+	}), nil, "", "")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v, want nil", err)
+	}
+	if len(checks) != 1 || checks[0].Name != "build" || checks[0].Bucket != scm.CheckBucketPending {
+		t.Fatalf("checks = %+v, want single pending build check", checks)
+	}
+}
+
+func TestGetChecksRejectsNullJSONOnNonZeroExit(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stdout: "null\n",
+			code:   1,
+		},
+	}), nil, "", "")
+
+	if _, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"}); err == nil {
+		t.Fatal("GetChecks() error = nil, want command failure")
+	}
+}
+
+func TestGetChecksIgnoresBracketedStderrOnNonZeroExit(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stdout: `[{"name":"build","state":"FAILURE","bucket":"fail"}]` + "\n",
+			stderr: "warning: check failed [exit status 1]\n",
+			code:   1,
+		},
+	}), nil, "", "")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v, want nil", err)
+	}
+	if len(checks) != 1 || checks[0].Name != "build" || checks[0].Bucket != scm.CheckBucketFail {
+		t.Fatalf("checks = %+v, want single failing build check", checks)
+	}
+}
+
+func TestGetChecksRejectsNonResultExitCodes(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []int{2, 4} {
+		code := code
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			t.Parallel()
+
+			host := New(githubTestCmdFactory(map[string]githubTestResponse{
+				"gh pr checks 123 --json name,state,bucket,completedAt": {
+					stdout: `[{"name":"build","state":"PENDING","bucket":"pending"}]` + "\n",
+					code:   code,
+				},
+			}), nil, "", "")
+
+			if _, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"}); err == nil {
+				t.Fatal("GetChecks() error = nil, want command failure")
+			}
+		})
+	}
+}
+
+func TestGetChecksFallsBackToLegacyOutputWhenJSONFlagUnsupported(t *testing.T) {
+	t.Parallel()
+
+	// gh CLIs older than v2.46 do not support `pr checks --json` and exit 1
+	// with an unknown-flag error. GetChecks must fall back to the plain
+	// invocation and parse its tab-separated output.
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stderr: "unknown flag: --json\n\nUsage:  gh pr checks [<number> | <url> | <branch>] [flags]\n",
+			code:   1,
+		},
+		"gh pr checks 123": {
+			stdout: "build\tpass\t29s\thttps://example.test/1\t\n" +
+				"deploy\tskipping\t0\thttps://example.test/2\t\n" +
+				"test\tfail\t2m1s\thttps://example.test/3\t\n" +
+				"lint\tpending\t0\thttps://example.test/4\t\n" +
+				"old\tcancel\t3s\thttps://example.test/5\t\n",
+			code: 1,
+		},
+	}), nil, "", "")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v, want nil", err)
+	}
+	want := []scm.Check{
+		{Name: "build", Bucket: scm.CheckBucketPass},
+		{Name: "deploy", Bucket: scm.CheckBucketSkip},
+		{Name: "test", Bucket: scm.CheckBucketFail},
+		{Name: "lint", Bucket: scm.CheckBucketPending},
+		{Name: "old", Bucket: scm.CheckBucketCancel},
+	}
+	if len(checks) != len(want) {
+		t.Fatalf("checks = %+v, want %+v", checks, want)
+	}
+	for i := range want {
+		if checks[i].Name != want[i].Name || checks[i].Bucket != want[i].Bucket {
+			t.Fatalf("checks[%d] = %+v, want %+v", i, checks[i], want[i])
+		}
+	}
+}
+
+func TestLegacyCheckRunBucket(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		status     string
+		conclusion string
+		want       scm.CheckBucket
+	}{
+		{name: "success", status: "completed", conclusion: "success", want: scm.CheckBucketPass},
+		{name: "failure", status: "completed", conclusion: "failure", want: scm.CheckBucketFail},
+		{name: "timed out", status: "completed", conclusion: "timed_out", want: scm.CheckBucketFail},
+		{name: "action required", status: "completed", conclusion: "action_required", want: scm.CheckBucketFail},
+		{name: "startup failure", status: "completed", conclusion: "startup_failure", want: scm.CheckBucketFail},
+		{name: "cancelled", status: "completed", conclusion: "cancelled", want: scm.CheckBucketCancel},
+		{name: "skipped", status: "completed", conclusion: "skipped", want: scm.CheckBucketSkip},
+		{name: "neutral", status: "completed", conclusion: "neutral", want: scm.CheckBucketSkip},
+		{name: "stale", status: "completed", conclusion: "stale", want: scm.CheckBucketSkip},
+		{name: "queued", status: "queued", want: scm.CheckBucketPending},
+		{name: "in progress", status: "in_progress", want: scm.CheckBucketPending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := legacyCheckRunBucket(tt.status, tt.conclusion)
+			if got != tt.want {
+				t.Fatalf("legacyCheckRunBucket(%q, %q) = %q, want %q", tt.status, tt.conclusion, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetChecksLegacyUsesStructuredAPIsWhenRepoKnown(t *testing.T) {
+	t.Parallel()
+
+	page1 := `{"check_runs":[{"name":"build","status":"completed","conclusion":"success","completed_at":"2026-04-24T04:15:00Z"}]}`
+	page2 := `{"check_runs":[{"name":"deploy","status":"completed","conclusion":"cancelled","completed_at":"2026-04-24T04:16:00Z"},{"name":"test","status":"in_progress"}]}`
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt": {
+			stderr: "unknown flag: --json\n",
+			code:   1,
+		},
+		"gh pr view 123 --repo test/repo --json headRefOid": {
+			stdout: `{"headRefOid":"abc123"}` + "\n",
+		},
+		"gh api repos/test/repo/commits/abc123/check-runs --paginate": {
+			stdout: page1 + "\n" + page2 + "\n",
+		},
+		"gh api repos/test/repo/commits/abc123/status --paginate": {
+			stdout: `{"statuses":[{"context":"coverage","state":"success","updated_at":"2026-04-24T04:17:00Z"},{"context":"external","state":"error","updated_at":"2026-04-24T04:18:00Z"}]}` + "\n" +
+				`{"statuses":[{"context":"release","state":"pending","updated_at":"2026-04-24T04:19:00Z"}]}` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	want := []scm.Check{
+		{Name: "build", Bucket: scm.CheckBucketPass, CompletedAt: time.Date(2026, 4, 24, 4, 15, 0, 0, time.UTC)},
+		{Name: "deploy", Bucket: scm.CheckBucketCancel, CompletedAt: time.Date(2026, 4, 24, 4, 16, 0, 0, time.UTC)},
+		{Name: "test", Bucket: scm.CheckBucketPending},
+		{Name: "coverage", Bucket: scm.CheckBucketPass, CompletedAt: time.Date(2026, 4, 24, 4, 17, 0, 0, time.UTC)},
+		{Name: "external", Bucket: scm.CheckBucketFail, CompletedAt: time.Date(2026, 4, 24, 4, 18, 0, 0, time.UTC)},
+		{Name: "release", Bucket: scm.CheckBucketPending, CompletedAt: time.Date(2026, 4, 24, 4, 19, 0, 0, time.UTC)},
+	}
+	if len(checks) != len(want) {
+		t.Fatalf("checks = %+v, want %+v", checks, want)
+	}
+	for i := range want {
+		if checks[i].Name != want[i].Name || checks[i].Bucket != want[i].Bucket || !checks[i].CompletedAt.Equal(want[i].CompletedAt) {
+			t.Fatalf("checks[%d] = %+v, want %+v", i, checks[i], want[i])
+		}
+	}
+}
+
+func TestGetChecksLegacyStructuredReturnsEmptyWhenNoChecksExist(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt": {stderr: "unknown flag: --json\n", code: 1},
+		"gh pr view 123 --repo test/repo --json headRefOid":                      {stdout: `{"headRefOid":"abc123"}` + "\n"},
+		"gh api repos/test/repo/commits/abc123/check-runs --paginate":            {stdout: `{"check_runs":[]}` + "\n"},
+		"gh api repos/test/repo/commits/abc123/status --paginate":                {stdout: `{"statuses":[]}` + "\n"},
+	}), nil, "", "test/repo")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v", err)
+	}
+	if len(checks) != 0 {
+		t.Fatalf("checks = %+v, want empty result", checks)
+	}
+}
+
+func TestDecodeLegacyCheckRunsRejectsMissingOrNullArray(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		"null\n",
+		"{}\n",
+		`{"check_runs":null}` + "\n",
+		`{"check_runs":[]}` + "\n{}\n",
+	} {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			if _, err := decodeLegacyCheckRuns([]byte(input)); err == nil {
+				t.Fatal("decodeLegacyCheckRuns() error = nil, want malformed response error")
+			}
+		})
+	}
+}
+
+func TestDecodeLegacyCommitStatusesRejectsMissingOrNullArray(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		"null\n",
+		"{}\n",
+		`{"statuses":null}` + "\n",
+		`{"statuses":[]}` + "\n{}\n",
+	} {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			if _, err := decodeLegacyCommitStatuses([]byte(input)); err == nil {
+				t.Fatal("decodeLegacyCommitStatuses() error = nil, want malformed response error")
+			}
+		})
+	}
+}
+
+func TestGetChecksLegacyStructuredFailsClosedOnCommandError(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt": {stderr: "unknown flag: --json\n", code: 1},
+		"gh pr view 123 --repo test/repo --json headRefOid":                      {stdout: `{"headRefOid":"abc123"}` + "\n"},
+		"gh api repos/test/repo/commits/abc123/check-runs --paginate":            {stderr: "API unavailable\n", code: 1},
+	}), nil, "", "test/repo")
+
+	if _, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"}); err == nil {
+		t.Fatal("GetChecks() error = nil, want API failure")
+	}
+}
+
+func TestGetChecksLegacyFallbackReturnsEmptyWhenNoChecksReported(t *testing.T) {
+	t.Parallel()
+
+	// A repo with no CI at all on an old gh: the --json probe fails with
+	// unknown flag, and the plain fallback exits 1 with "no checks reported".
+	// This must be a clean empty result, not an error, or the CI monitor
+	// stalls forever (the original bug).
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stderr: "unknown flag: --json\n",
+			code:   1,
+		},
+		"gh pr checks 123": {
+			stderr: "no checks reported on the 'feature' branch\n",
+			code:   1,
+		},
+	}), nil, "", "")
+
+	checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatalf("GetChecks() error = %v, want nil for no checks", err)
+	}
+	if len(checks) != 0 {
+		t.Fatalf("len(checks) = %d, want 0", len(checks))
+	}
+}
+
+func TestGetChecksLegacyFallbackRejectsUnparseableOutput(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stderr: "unknown flag: --json\n",
+			code:   1,
+		},
+		"gh pr checks 123": {
+			stderr: "GraphQL: something went wrong\n",
+			code:   1,
+		},
+	}), nil, "", "")
+
+	if _, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"}); err == nil {
+		t.Fatal("GetChecks() error = nil, want failure for unparseable fallback output")
+	}
+}
+
+func TestGetChecksReturnsContextError(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stdout: `[{"name":"build","state":"PENDING","bucket":"pending"}]` + "\n",
+		},
+	}), nil, "", "")
+
+	if _, err := host.GetChecks(ctx, &scm.PR{Number: "123"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetChecks() error = %v, want context.Canceled", err)
 	}
 }
 
@@ -401,7 +774,11 @@ func TestGitHubHelperProcess(t *testing.T) {
 		os.Exit(1)
 	}
 	if code := os.Getenv("GITHUB_TEST_EXIT_CODE"); code != "" && code != "0" {
-		os.Exit(1)
+		exitCode, err := strconv.Atoi(code)
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(exitCode)
 	}
 	os.Exit(0)
 }
