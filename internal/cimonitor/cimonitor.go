@@ -93,9 +93,9 @@ func ParseActivity(logs []string) Activity {
 	return a
 }
 
-// ChecksPassed reports whether the CI monitor's latest state is "checks passed
-// or none configured, PR ready to merge". It is the agent-facing summary of
-// ParseActivity(logs).Ready.
+// ChecksPassed reports whether the CI monitor's latest state is ready (checks
+// passed, or previously observed checks disappeared). It is the agent-facing
+// summary of ParseActivity(logs).Ready.
 func ChecksPassed(logs []string) bool {
 	return ParseActivity(logs).Ready
 }
