@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +57,34 @@ func TestLoadGlobal_CommitFixMessageUnknownField(t *testing.T) {
 	if _, err := LoadGlobal(path); err == nil {
 		t.Fatal("expected error for unknown template field, got nil")
 	}
+}
+
+func TestLoadGlobal_CommitFixMessageValidatesEveryFixStep(t *testing.T) {
+	fixSteps := []types.StepName{
+		types.StepReview,
+		types.StepTest,
+		types.StepLint,
+		types.StepDocument,
+		types.StepCI,
+		types.StepPush,
+	}
+	for _, step := range fixSteps {
+		t.Run(string(step), func(t *testing.T) {
+			tmpl := fmt.Sprintf(`{{if eq .Step %q}}{{.Nope}}{{else}}ok{{end}}`, step)
+			path := writeGlobalConfig(t, "commit:\n  fix_message: '"+tmpl+"'\n")
+			if _, err := LoadGlobal(path); err == nil {
+				t.Fatalf("expected error for invalid %s conditional branch, got nil", step)
+			}
+		})
+	}
+
+	t.Run("empty conditional branch", func(t *testing.T) {
+		tmpl := `{{if eq .Step "push"}} {{else}}ok{{end}}`
+		path := writeGlobalConfig(t, "commit:\n  fix_message: '"+tmpl+"'\n")
+		if _, err := LoadGlobal(path); err == nil {
+			t.Fatal("expected error for empty conditional branch, got nil")
+		}
+	})
 }
 
 func TestLoadGlobal_CommitFixMessageWhitespaceOnlyRender(t *testing.T) {

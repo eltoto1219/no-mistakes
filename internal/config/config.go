@@ -766,8 +766,18 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 	if raw.Commit.FixMessage != "" {
 		// Validate eagerly so a broken template fails config load with a clear
 		// error instead of degrading commit messages mid-pipeline.
-		if _, err := renderFixCommitMessage(raw.Commit.FixMessage, "lint", "sample summary"); err != nil {
-			return nil, err
+		fixSteps := []types.StepName{
+			types.StepReview,
+			types.StepTest,
+			types.StepLint,
+			types.StepDocument,
+			types.StepCI,
+			types.StepPush,
+		}
+		for _, step := range fixSteps {
+			if _, err := renderFixCommitMessage(raw.Commit.FixMessage, string(step), "sample summary"); err != nil {
+				return nil, fmt.Errorf("validate commit.fix_message for %s step: %w", step, err)
+			}
 		}
 		cfg.CommitFixMessage = raw.Commit.FixMessage
 	}
