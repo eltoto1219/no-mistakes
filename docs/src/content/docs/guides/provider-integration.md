@@ -39,7 +39,8 @@ Once the host is wired up, `no-mistakes` can keep owning the branch after it
 pushes to the configured target:
 
 - create or update the PR automatically
-- keep polling hosted CI until the PR is merged, closed, declined, or the configured `ci_timeout` idle window elapses
+- keep polling hosted CI until the PR is merged, closed, declined, or the configured `ci_timeout` idle window elapses, unless the PR never reports a check and the three-minute registration window completes
+- complete the CI step after that registration window on GitHub, GitLab, Bitbucket Cloud, and Azure DevOps, including with `ci_timeout: unlimited`, while continuing the merge-or-close monitor if previously observed checks disappear
 - fetch failing job logs for the CI auto-fix loop
 - on GitHub, GitLab, and Azure DevOps, watch mergeability and fix merge conflicts when possible
 
@@ -70,7 +71,7 @@ When `gh` predates v2.46 and does not support `gh pr checks --json`, no-mistakes
 **What you get:**
 
 - PR creation and update on pushes
-- CI check polling with exponential backoff (30s → 60s → 120s) until the PR is merged, closed, or the configured `ci_timeout` idle window elapses
+- CI check polling with exponential backoff (30s → 60s → 120s) until the PR is merged, closed, or the configured `ci_timeout` idle window elapses, unless the PR never reports a check and the three-minute registration window completes
 - A PR that never reports a GitHub check completes the CI step after the three-minute registration window instead of remaining stuck in CI polling
 - If previously observed GitHub checks disappear, the ready signal remains and monitoring continues until the PR is merged or closed
 - Failed job log fetching (`gh run view --log-failed`) for the CI auto-fix step
@@ -110,7 +111,8 @@ glab auth login
 **What you get:**
 
 - PR (merge request) creation and update
-- CI pipeline status polling until the merge request is merged, closed, or the configured `ci_timeout` idle window elapses
+- CI pipeline status polling until the merge request is merged, closed, or the configured `ci_timeout` idle window elapses, unless the merge request never reports a check and the three-minute registration window completes
+- If previously observed GitLab checks disappear, monitoring continues until the merge request is merged or closed
 - Failed job trace fetching (`glab ci trace`) for the CI auto-fix step
 - Merge-conflict polling and auto-fix, same as GitHub
 
@@ -131,7 +133,8 @@ Get an API token from [Bitbucket account settings](https://bitbucket.org/account
 **What you get:**
 
 - PR creation and update
-- CI pipeline status polling until the PR is merged, declined, or the configured `ci_timeout` idle window elapses
+- CI pipeline status polling until the PR is merged, declined, or the configured `ci_timeout` idle window elapses, unless the PR never reports a check and the three-minute registration window completes
+- If previously observed Bitbucket checks disappear, monitoring continues until the PR is merged or declined
 - Failed pipeline step log fetching for the CI auto-fix step
 
 **What you don't get (yet):**
@@ -175,9 +178,8 @@ well as their SSH forms (`git@ssh.dev.azure.com:v3/...`).
   PR descriptions at 4000 characters, so the pipeline builds the body within
   that budget - shedding the Testing section first when needed, then applying
   a final truncation backstop with a visible marker
-- CI status polling - Azure branch policy evaluations (build validation and
-  status checks) are read via `az repos pr policy list` until the PR is
-  completed, abandoned, or the configured `ci_timeout` idle window elapses
+- CI status polling - Azure branch policy evaluations (build validation and status checks) are read via `az repos pr policy list` until the PR is completed, abandoned, or the configured `ci_timeout` idle window elapses, unless the PR never reports a check and the three-minute registration window completes
+- If previously observed Azure DevOps checks disappear, monitoring continues until the PR is completed or abandoned
 - Merge-conflict polling and auto-fix from the PR's `mergeStatus`
 
 **What you don't get (yet):**
