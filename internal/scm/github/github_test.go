@@ -231,6 +231,21 @@ func TestGetChecksReturnsPendingChecksOnExitEight(t *testing.T) {
 	}
 }
 
+func TestGetChecksRejectsNullJSONOnNonZeroExit(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --json name,state,bucket,completedAt": {
+			stdout: "null\n",
+			code:   1,
+		},
+	}), nil, "", "")
+
+	if _, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"}); err == nil {
+		t.Fatal("GetChecks() error = nil, want command failure")
+	}
+}
+
 func TestGetChecksIgnoresBracketedStderrOnNonZeroExit(t *testing.T) {
 	t.Parallel()
 

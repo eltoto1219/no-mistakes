@@ -126,7 +126,7 @@ func (h *Host) headRef(branch string) string {
 // isJSONArray reports whether b is a valid JSON array (possibly empty).
 func isJSONArray(b []byte) bool {
 	var probe []json.RawMessage
-	return json.Unmarshal(b, &probe) == nil
+	return json.Unmarshal(b, &probe) == nil && probe != nil
 }
 
 func repoOwner(slug string) string {
