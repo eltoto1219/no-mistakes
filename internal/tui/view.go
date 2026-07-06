@@ -109,6 +109,8 @@ func (m Model) View() string {
 			section = m.renderInstructionEditor(boxWidth)
 		case editorAddFinding:
 			section = m.renderAddFindingEditor(boxWidth)
+		case editorIntent:
+			section = m.renderIntentEditor(boxWidth)
 		}
 		if section != "" {
 			extraSections = append(extraSections, section)
@@ -377,6 +379,7 @@ func renderFooter(done bool, showHelp bool, confirmAbort bool, yolo bool, run *i
 			xLabel = "again to abort"
 		}
 		left += "  " + boldKey.Render("x") + " " + dimStyle.Render(xLabel)
+		left += "  " + boldKey.Render("i") + " " + dimStyle.Render("intent")
 	}
 	left += "  " + boldKey.Render("?") + " " + dimStyle.Render(helpLabel)
 	if yolo {

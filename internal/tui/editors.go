@@ -17,6 +17,7 @@ const (
 	editorNone editorKind = iota
 	editorInstruction
 	editorAddFinding
+	editorIntent
 )
 
 // addFindingField identifies the currently focused input in the add-finding modal.
@@ -43,6 +44,9 @@ type editorState struct {
 	addDesc  textarea.Model
 	addInstr textarea.Model
 	addFocus addFindingField
+
+	// intent editor field
+	intent textarea.Model
 }
 
 func newInstructionEditor(step types.StepName, findingID, existing string) *editorState {
@@ -88,6 +92,23 @@ func newAddFindingEditor(step types.StepName) *editorState {
 	return e
 }
 
+// newIntentEditor opens the run-intent editor prefilled with the current
+// intent so pressing save without changes is a harmless no-op.
+func newIntentEditor(existing string) *editorState {
+	ta := textarea.New()
+	ta.Placeholder = "what this change set out to accomplish..."
+	ta.SetValue(existing)
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 4000
+	ta.SetHeight(6)
+	ta.SetWidth(72)
+	ta.Focus()
+	return &editorState{
+		kind:   editorIntent,
+		intent: ta,
+	}
+}
+
 // isActive reports whether an editor modal is currently open.
 func (m Model) editorActive() bool { return m.editor != nil && m.editor.kind != editorNone }
 
@@ -105,8 +126,29 @@ func (m Model) updateEditor(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.updateInstructionEditor(msg)
 	case editorAddFinding:
 		return m.updateAddFindingEditor(msg)
+	case editorIntent:
+		return m.updateIntentEditor(msg)
 	}
 	return m, nil
+}
+
+func (m Model) updateIntentEditor(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.editor = nil
+		return m, nil
+	case "ctrl+s", "ctrl+enter":
+		text := strings.TrimSpace(m.editor.intent.Value())
+		if text == "" {
+			m.editor.errorMsg = "intent must not be empty"
+			return m, nil
+		}
+		m.editor = nil
+		return m, m.setIntentCmd(text)
+	}
+	var cmd tea.Cmd
+	m.editor.intent, cmd = m.editor.intent.Update(msg)
+	return m, cmd
 }
 
 func (m Model) updateInstructionEditor(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -329,6 +371,38 @@ func (m Model) renderInstructionEditor(width int) string {
 	var body strings.Builder
 	body.WriteString(m.editor.instruction.View())
 	body.WriteString("\n")
+	body.WriteString(dimStyle.Render("ctrl+s save  ·  esc cancel"))
+
+	return renderBoxWithStyledTitle(title, body.String(), boxWidth, "")
+}
+
+// renderIntentEditor renders the run-intent editor overlay.
+func (m Model) renderIntentEditor(width int) string {
+	if m.editor == nil || m.editor.kind != editorIntent {
+		return ""
+	}
+	boxWidth := width
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	contentWidth := boxWidth - 4
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
+	m.editor.intent.SetWidth(contentWidth)
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiCyan))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBrightBlack))
+	title := titleStyle.Render("Intent")
+
+	var body strings.Builder
+	body.WriteString(m.editor.intent.View())
+	body.WriteString("\n")
+	if m.editor.errorMsg != "" {
+		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiRed))
+		body.WriteString(errStyle.Render("! " + m.editor.errorMsg))
+		body.WriteString("\n")
+	}
 	body.WriteString(dimStyle.Render("ctrl+s save  ·  esc cancel"))
 
 	return renderBoxWithStyledTitle(title, body.String(), boxWidth, "")

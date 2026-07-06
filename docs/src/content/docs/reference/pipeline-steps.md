@@ -23,6 +23,7 @@ This is best-effort context, and when available it is included in rebase fixes, 
 
 **Behavior:**
 - Uses run-supplied intent verbatim and skips transcript-based inference, even when `intent.enabled` is false
+- Treats an active-run edit from `axi intent --set` as authoritative, including when the edit arrives during inference, and refreshes the persisted intent before later steps and fix rounds
 - Runs transcript-based inference only when `intent.enabled` is true
 - Matches local agent transcripts against non-deleted changed files when present, falling back to all changed files for all-deletion diffs, may use the configured pipeline agent to disambiguate plausible matches, and summarizes the likely author intent with that agent
 - Stores the derived summary, source, session ID, and match score on the run

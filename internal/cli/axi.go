@@ -43,6 +43,7 @@ func newAxiCmd() *cobra.Command {
 
 	cmd.AddCommand(newAxiRunCmd())
 	cmd.AddCommand(newAxiRespondCmd())
+	cmd.AddCommand(newAxiIntentCmd())
 	cmd.AddCommand(newAxiStatusCmd())
 	cmd.AddCommand(newAxiLogsCmd())
 	cmd.AddCommand(newAxiAbortCmd())
@@ -175,6 +176,7 @@ func runAxiHome(cmd *cobra.Command) error {
 		}
 	case gated:
 		help = append(help, "Run `no-mistakes axi respond --action approve` to clear the current gate")
+		help = append(help, `Run `+"`"+`no-mistakes axi intent --set "..."`+"`"+` first if the run's intent is wrong or stale`)
 	default:
 		help = append(help, "Run `no-mistakes axi status` to inspect the active run")
 	}

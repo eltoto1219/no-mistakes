@@ -16,6 +16,7 @@ const (
 	MethodRerun        = "rerun"
 	MethodSubscribe    = "subscribe"
 	MethodRespond      = "respond"
+	MethodSetIntent    = "set_intent"
 	MethodCancelRun    = "cancel_run"
 	MethodHealth       = "health"
 	MethodShutdown     = "shutdown"
@@ -117,6 +118,14 @@ type RespondParams struct {
 	AddedFindings []types.Finding      `json:"added_findings,omitempty"`
 }
 
+// SetIntentParams replaces the intent on an active run. The executor re-reads
+// the persisted intent before each step round, so the edit reaches subsequent
+// prompts without restarting the run.
+type SetIntentParams struct {
+	RunID  string `json:"run_id"`
+	Intent string `json:"intent"`
+}
+
 // CancelRunParams cancels an active pipeline run.
 type CancelRunParams struct {
 	RunID string `json:"run_id"`
@@ -160,6 +169,11 @@ type RespondResult struct {
 	OK bool `json:"ok"`
 }
 
+// SetIntentResult confirms the intent update was accepted.
+type SetIntentResult struct {
+	OK bool `json:"ok"`
+}
+
 // CancelRunResult confirms the run cancellation request was accepted.
 type CancelRunResult struct {
 	OK bool `json:"ok"`
@@ -187,6 +201,9 @@ type RunInfo struct {
 	Status  types.RunStatus `json:"status"`
 	PRURL   *string         `json:"pr_url,omitempty"`
 	Error   *string         `json:"error,omitempty"`
+	// Intent is the run's current intent (agent-supplied, inferred by the
+	// intent step, or edited via set_intent), so UIs can show and edit it.
+	Intent *string `json:"intent,omitempty"`
 	// AwaitingAgent is true while the run is parked at a gate awaiting the
 	// driving agent's response. AwaitingAgentSince is the unix-seconds time it
 	// parked, so a supervisor can read "parked for N seconds" in one call. Both

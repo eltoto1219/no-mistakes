@@ -244,6 +244,70 @@ func TestAxiParkedAwaitingAgentSignal(t *testing.T) {
 	}
 }
 
+// TestAxiIntentEditJourney proves the generated/supplied intent of a run can
+// be inspected and edited end to end while the run is parked at a gate:
+// `axi intent` shows it, `axi intent --set` replaces it, and the edited intent
+// - not the original - reaches the prompts of the steps that run after the
+// gate is cleared.
+func TestAxiIntentEditJourney(t *testing.T) {
+	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: axiScenario(t)})
+
+	h.CommitChange("init-intent-edit", "seed.txt", "seed\n", "seed for intent edit")
+	initWorktree := h.AddWorktree("init-intent-edit")
+	if out, err := h.RunInDir(initWorktree, "init"); err != nil {
+		t.Fatalf("nm init: %v\n%s", err, out)
+	}
+
+	h.CommitChange("feature/intent-edit", "feature.txt", "change\n", "add feature change")
+	fw := h.AddWorktree("feature/intent-edit")
+
+	if out, err := h.RunInDir(fw, "axi", "run", "--intent", axiIntent); err != nil {
+		t.Fatalf("axi run (expected to stop at gate, exit 0): %v\n%s", err, out)
+	}
+	if gated := waitForStepStatus(t, h, "feature/intent-edit", types.StepReview, types.StepStatusAwaitingApproval, 60*time.Second); gated == nil {
+		t.Fatal("expected feature/intent-edit run to be awaiting approval")
+	}
+
+	// The parked run's intent is inspectable and shows the supplied text.
+	showOut, err := h.RunInDir(fw, "axi", "intent")
+	if err != nil {
+		t.Fatalf("axi intent: %v\n%s", err, showOut)
+	}
+	if !strings.Contains(showOut, axiIntent) {
+		t.Errorf("axi intent output missing the supplied intent %q:\n%s", axiIntent, showOut)
+	}
+
+	// Edit it while parked.
+	editedIntent := "actually the goal is to rename the flag and keep the old name as a deprecated alias"
+	setOut, err := h.RunInDir(fw, "axi", "intent", "--set", editedIntent)
+	if err != nil {
+		t.Fatalf("axi intent --set: %v\n%s", err, setOut)
+	}
+	if !strings.Contains(setOut, editedIntent) {
+		t.Errorf("axi intent --set output missing the edited intent:\n%s", setOut)
+	}
+	if reshow, err := h.RunInDir(fw, "axi", "intent"); err != nil || !strings.Contains(reshow, editedIntent) {
+		t.Errorf("axi intent does not show the edited intent (err %v):\n%s", err, reshow)
+	}
+
+	// Clear the gate; the remaining steps run with the edited intent.
+	if out, err := h.RunInDir(fw, "axi", "respond", "--action", "approve"); err != nil {
+		t.Fatalf("axi respond approve: %v\n%s", err, out)
+	}
+	completed := h.WaitForRun("feature/intent-edit", 60*time.Second)
+	if completed.Status != types.RunCompleted {
+		t.Fatalf("feature/intent-edit run status = %s, want completed", completed.Status)
+	}
+
+	intent := readRunIntent(t, h.NMHome, completed.ID)
+	if intent.summary == nil || *intent.summary != editedIntent {
+		t.Errorf("runs.intent = %v, want the edited intent", intent.summary)
+	}
+	if !anyPromptContains(h, editedIntent) {
+		t.Errorf("edited intent %q never reached an agent prompt", editedIntent)
+	}
+}
+
 // TestAxiRunPreflightGuards proves `axi run` refuses to start a run with
 // structured, actionable errors instead of silently doing the wrong thing:
 // missing intent, the default branch, and an uncommitted working tree.

@@ -126,6 +126,105 @@ func TestPushReceivedSkipStepsConfiguresExecutor(t *testing.T) {
 	}
 }
 
+// TestSetIntentEditsActiveRun proves the set_intent IPC method replaces the
+// intent on a run parked at a gate, rejects empty intents and unknown runs,
+// and refuses edits once the run has finished (the intent is already consumed).
+func TestSetIntentEditsActiveRun(t *testing.T) {
+	approvalStep := &mockApprovalStep{name: types.StepReview}
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+		return []pipeline.Step{approvalStep}
+	})
+
+	_, headSHA := setupTestGitRepo(t, p, d, "set-intent-repo")
+
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var pushResult ipc.PushReceivedResult
+	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate:   p.RepoDir("set-intent-repo"),
+		Ref:    "refs/heads/main",
+		Old:    "0000000000000000000000000000000000000000",
+		New:    headSHA,
+		Intent: "original intent",
+	}, &pushResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := pushResult.RunID
+
+	// Wait for the review step to park at its gate.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		steps, _ := d.GetStepsByRun(runID)
+		parked := false
+		for _, s := range steps {
+			if s.Status == types.StepStatusAwaitingApproval {
+				parked = true
+			}
+		}
+		if parked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("step never reached awaiting_approval")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	var setResult ipc.SetIntentResult
+	if err := client.Call(ipc.MethodSetIntent, &ipc.SetIntentParams{RunID: runID, Intent: "  "}, &setResult); err == nil {
+		t.Error("set_intent with blank intent succeeded, want error")
+	}
+	if err := client.Call(ipc.MethodSetIntent, &ipc.SetIntentParams{RunID: "no-such-run", Intent: "x"}, &setResult); err == nil {
+		t.Error("set_intent for unknown run succeeded, want error")
+	}
+
+	if err := client.Call(ipc.MethodSetIntent, &ipc.SetIntentParams{RunID: runID, Intent: "edited intent"}, &setResult); err != nil {
+		t.Fatalf("set_intent: %v", err)
+	}
+	if !setResult.OK {
+		t.Fatal("set_intent result not OK")
+	}
+	run, err := d.GetRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Intent == nil || *run.Intent != "edited intent" {
+		t.Fatalf("runs.intent = %v, want %q", run.Intent, "edited intent")
+	}
+	if run.IntentSource == nil || *run.IntentSource != "agent" {
+		t.Fatalf("runs.intent_source = %v, want agent", run.IntentSource)
+	}
+
+	var respondResult ipc.RespondResult
+	if err := client.Call(ipc.MethodRespond, &ipc.RespondParams{
+		RunID:  runID,
+		Step:   types.StepReview,
+		Action: types.ActionApprove,
+	}, &respondResult); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunTerminalState(t, d, runID)
+
+	// The write is conditional on the run still being non-terminal, so the
+	// edit is rejected immediately once the terminal status is persisted -
+	// even while the executor is still registered during cleanup.
+	if err := client.Call(ipc.MethodSetIntent, &ipc.SetIntentParams{RunID: runID, Intent: "too late"}, &setResult); err == nil {
+		t.Error("set_intent on a finished run succeeded, want error")
+	}
+	run, err = d.GetRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Intent == nil || *run.Intent != "edited intent" {
+		t.Fatalf("runs.intent after finished-run edit attempt = %v, want %q", run.Intent, "edited intent")
+	}
+}
+
 func TestPushReceivedAllowsDifferentBranchRunsConcurrently(t *testing.T) {
 	started := make(chan string, 2)
 	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {

@@ -471,6 +471,29 @@ func TestAxiAbortByRunIDNoOpWhenDaemonStopped(t *testing.T) {
 	}
 }
 
+// TestAxiIntentBlankSetIsUsageError proves an explicitly supplied blank --set
+// is rejected as a usage error instead of silently falling back to the read
+// path. Validation runs before any env/daemon access, so no setup is needed.
+func TestAxiIntentBlankSetIsUsageError(t *testing.T) {
+	for _, blank := range []string{"", "   "} {
+		var out bytes.Buffer
+		cmd := newAxiIntentCmd()
+		cmd.SetContext(context.Background())
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs([]string{"--set", blank})
+
+		err := cmd.Execute()
+		var ee *exitError
+		if !errors.As(err, &ee) || ee.code != 2 {
+			t.Fatalf("--set %q: err = %v, want exit code 2", blank, err)
+		}
+		if !strings.Contains(out.String(), "--set requires a non-empty intent") {
+			t.Errorf("--set %q output missing validation error:\n%s", blank, out.String())
+		}
+	}
+}
+
 func TestResolveRunPrefersCurrentBranchLatestRun(t *testing.T) {
 	database := openTestDB(t)
 	repo, err := database.InsertRepo(t.TempDir(), "origin", "main")

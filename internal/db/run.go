@@ -208,6 +208,51 @@ func (d *DB) UpdateRunIntent(id string, intent RunIntent) error {
 	return nil
 }
 
+// UpdateRunIntentIfActive replaces a run's intent only while the run is still
+// non-terminal, reporting whether a row was updated. This is the atomic guard
+// behind `axi intent --set`: the manager's executor-presence check can race the
+// run's terminal DB transition (the executor is deregistered slightly after the
+// status flips), and this condition ensures a losing edit is rejected instead
+// of rewriting a finished run's history.
+func (d *DB) UpdateRunIntentIfActive(id string, intent RunIntent) (bool, error) {
+	res, err := d.sql.Exec(
+		`UPDATE runs SET intent = ?, intent_source = ?, intent_session_id = ?, intent_score = ?, updated_at = ?
+		 WHERE id = ? AND status IN (?, ?)`,
+		intent.Summary, intent.Source, intent.SessionID, intent.Score, now(), id,
+		string(types.RunPending), string(types.RunRunning),
+	)
+	if err != nil {
+		return false, fmt.Errorf("update run intent if active: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("update run intent if active: rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
+// UpdateRunIntentIfEmpty persists an inferred intent only when the run does not
+// already carry one, reporting whether the write won. The intent step's
+// transcript inference can take minutes, and an explicit edit (`axi intent
+// --set`) may land mid-inference; the edit is authoritative, so the inferred
+// value must not clobber it. Callers that lose should re-read the run to pick
+// up the winning intent.
+func (d *DB) UpdateRunIntentIfEmpty(id string, intent RunIntent) (bool, error) {
+	res, err := d.sql.Exec(
+		`UPDATE runs SET intent = ?, intent_source = ?, intent_session_id = ?, intent_score = ?, updated_at = ?
+		 WHERE id = ? AND (intent IS NULL OR TRIM(intent) = '')`,
+		intent.Summary, intent.Source, intent.SessionID, intent.Score, now(), id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("update run intent if empty: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("update run intent if empty: rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
 // SetRunAwaitingAgent marks a run as parked awaiting the driving agent,
 // stamping awaiting_agent_since with the current time. Called by the executor
 // when a step enters a gate (awaiting_approval / fix_review). This is a pollable

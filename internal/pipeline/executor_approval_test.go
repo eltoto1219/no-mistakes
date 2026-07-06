@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -119,6 +120,79 @@ func TestExecutor_AwaitingAgentMarkerSetOnGateClearedOnRespond(t *testing.T) {
 	}
 	if resumed.AwaitingAgentSince != nil {
 		t.Errorf("AwaitingAgentSince = %d after respond, want nil", *resumed.AwaitingAgentSince)
+	}
+}
+
+// TestExecutor_IntentEditWhileParkedReachesLaterRounds proves an intent edit
+// persisted while a step is parked at a gate (what `axi intent --set` does)
+// reaches both the parked step's fix round and every subsequent step, because
+// the executor re-reads the persisted intent before each execution round.
+func TestExecutor_IntentEditWhileParkedReachesLaterRounds(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	if err := database.UpdateRunIntent(run.ID, db.RunIntent{Summary: "original intent", Source: "agent", Score: 1}); err != nil {
+		t.Fatalf("seed intent: %v", err)
+	}
+
+	var reviewIntents []string
+	review := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			reviewIntents = append(reviewIntents, sctx.UserIntent)
+			if len(reviewIntents) == 1 {
+				return &StepOutcome{NeedsApproval: true, Findings: `{"findings":[{"id":"f1","severity":"warning","description":"x","action":"ask-user"}],"summary":"1 issue"}`}, nil
+			}
+			return &StepOutcome{}, nil
+		},
+	}
+	var testIntent string
+	testStep := &adaptiveCallStep{
+		name: types.StepTest,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			testIntent = sctx.UserIntent
+			return &StepOutcome{}, nil
+		},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{review, testStep}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+
+	// Edit the intent while the run is parked, exactly as the daemon's
+	// set_intent handler does, then resume with a fix round.
+	if err := database.UpdateRunIntent(run.ID, db.RunIntent{Summary: "edited intent", Source: "agent", Score: 1}); err != nil {
+		t.Fatalf("edit intent: %v", err)
+	}
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"f1"}); err != nil {
+		t.Fatalf("respond: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("executor error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	if len(reviewIntents) != 2 {
+		t.Fatalf("review executed %d times, want 2", len(reviewIntents))
+	}
+	if reviewIntents[0] != "original intent" {
+		t.Errorf("first review round intent = %q, want original", reviewIntents[0])
+	}
+	if reviewIntents[1] != "edited intent" {
+		t.Errorf("fix round intent = %q, want edited", reviewIntents[1])
+	}
+	if testIntent != "edited intent" {
+		t.Errorf("test step intent = %q, want edited", testIntent)
 	}
 }
 

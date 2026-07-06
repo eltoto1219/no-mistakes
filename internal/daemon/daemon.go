@@ -432,6 +432,17 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		return &ipc.RespondResult{OK: true}, nil
 	})
 
+	srv.Handle(ipc.MethodSetIntent, func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p ipc.SetIntentParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if err := mgr.HandleSetIntent(p.RunID, p.Intent); err != nil {
+			return nil, err
+		}
+		return &ipc.SetIntentResult{OK: true}, nil
+	})
+
 	srv.Handle(ipc.MethodCancelRun, func(_ context.Context, params json.RawMessage) (interface{}, error) {
 		var p ipc.CancelRunParams
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -478,6 +489,7 @@ func runToInfo(d *db.DB, r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 		Status:             r.Status,
 		PRURL:              r.PRURL,
 		Error:              r.Error,
+		Intent:             r.Intent,
 		AwaitingAgent:      r.AwaitingAgentSince != nil,
 		AwaitingAgentSince: r.AwaitingAgentSince,
 		CreatedAt:          r.CreatedAt,

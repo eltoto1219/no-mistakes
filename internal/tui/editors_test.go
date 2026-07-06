@@ -330,3 +330,88 @@ func TestRespondCmd_IncludesInstructionsAndAddedFindings(t *testing.T) {
 		t.Fatal("test setup bug")
 	}
 }
+
+func TestIntentEditor_OpensPrefilledFromRun(t *testing.T) {
+	m := newAwaitingModel(t, "")
+	existing := "add retry to the uploader"
+	m.run.Intent = &existing
+
+	next, _ := m.handleKey(keyMsg("i"))
+	updated := next.(Model)
+	if !updated.editorActive() || updated.editor.kind != editorIntent {
+		t.Fatal("expected the intent editor to open on 'i'")
+	}
+	if got := updated.editor.intent.Value(); got != existing {
+		t.Fatalf("intent editor prefill = %q, want %q", got, existing)
+	}
+}
+
+func TestIntentEditor_IgnoredWhenRunDone(t *testing.T) {
+	m := newAwaitingModel(t, "")
+	m.done = true
+
+	next, _ := m.handleKey(keyMsg("i"))
+	if next.(Model).editorActive() {
+		t.Fatal("intent editor must not open on a finished run")
+	}
+}
+
+func TestIntentEditor_BlankSaveShowsError(t *testing.T) {
+	m := newAwaitingModel(t, "")
+	m.editor = newIntentEditor("")
+
+	next, cmd := m.handleKey(keyMsg("ctrl+s"))
+	updated := next.(Model)
+	if cmd != nil {
+		t.Fatal("blank save must not produce a command")
+	}
+	if !updated.editorActive() {
+		t.Fatal("editor should stay open on blank save")
+	}
+	if !strings.Contains(updated.editor.errorMsg, "must not be empty") {
+		t.Fatalf("errorMsg = %q, want empty-intent validation", updated.editor.errorMsg)
+	}
+}
+
+func TestIntentEditor_SaveClosesEditorAndAckUpdatesRun(t *testing.T) {
+	m := newAwaitingModel(t, "")
+	m.editor = newIntentEditor("the corrected intent")
+
+	next, _ := m.handleKey(keyMsg("ctrl+s"))
+	updated := next.(Model)
+	if updated.editorActive() {
+		t.Fatal("editor should close on save")
+	}
+
+	// The daemon ack carries the accepted text; the model adopts it so a
+	// reopened editor prefills with the edit.
+	after, _ := updated.Update(intentSavedMsg{intent: "the corrected intent"})
+	final := after.(Model)
+	if final.run.Intent == nil || *final.run.Intent != "the corrected intent" {
+		t.Fatalf("run.Intent after ack = %v, want the corrected intent", final.run.Intent)
+	}
+}
+
+func TestIntentEditor_EscCancelsWithoutSaving(t *testing.T) {
+	m := newAwaitingModel(t, "")
+	m.editor = newIntentEditor("draft edit")
+
+	next, _ := m.handleKey(keyMsg("esc"))
+	updated := next.(Model)
+	if updated.editorActive() {
+		t.Fatal("esc should close the editor")
+	}
+	if updated.run.Intent != nil {
+		t.Fatalf("esc must not change run.Intent, got %v", updated.run.Intent)
+	}
+}
+
+func TestIntentEditor_RendersInView(t *testing.T) {
+	m := newAwaitingModel(t, "")
+	m.editor = newIntentEditor("current intent text")
+
+	view := m.View()
+	if !strings.Contains(view, "Intent") || !strings.Contains(view, "current intent text") {
+		t.Fatalf("view missing intent editor overlay:\n%s", view)
+	}
+}
