@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -165,6 +166,7 @@ func (s *CIStep) pushUpdatedHeadSHA(sctx *pipeline.StepContext, newHeadSHA strin
 			return false, fmt.Errorf("update local branch ref: %w", err)
 		}
 		sctx.Run.HeadSHA = newHeadSHA
+		s.emptyChecksSince = time.Time{}
 		if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, newHeadSHA); err != nil {
 			return false, err
 		}
@@ -173,6 +175,7 @@ func (s *CIStep) pushUpdatedHeadSHA(sctx *pipeline.StepContext, newHeadSHA strin
 	if err := stepGitPush(sctx, pushURL, ref, decision.remoteSHA, !decision.newBranch); err != nil {
 		return false, fmt.Errorf("push: %w", err)
 	}
+	s.emptyChecksSince = time.Time{}
 
 	if _, err := stepGitRun(sctx, "update-ref", ref, newHeadSHA); err != nil {
 		return false, fmt.Errorf("update local branch ref: %w", err)
