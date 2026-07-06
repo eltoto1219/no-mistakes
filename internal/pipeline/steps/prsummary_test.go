@@ -36,7 +36,7 @@ func TestBuildPipelineSummary_AllClean(t *testing.T) {
 		"s2": {{Round: 1, Trigger: "initial", DurationMS: 300}},
 		"s3": {{Round: 1, Trigger: "initial", DurationMS: 200}},
 	}
-	md, risk := BuildPipelineSummary(steps, rounds)
+	md, risk := BuildPipelineSummary(steps, rounds, true)
 
 	if !strings.Contains(md, "## Pipeline") {
 		t.Error("missing Pipeline heading")
@@ -82,7 +82,7 @@ func TestBuildPipelineSummary_IncludesAllPipelineSteps(t *testing.T) {
 		"s6": {{Round: 1, Trigger: "initial", DurationMS: 700}},
 	}
 
-	md, _ := BuildPipelineSummary(steps, rounds)
+	md, _ := BuildPipelineSummary(steps, rounds, true)
 
 	for _, want := range []string{
 		"<summary>✅ **Rebase** - passed</summary>",
@@ -116,7 +116,7 @@ func TestBuildPipelineSummary_SkippedStep(t *testing.T) {
 		"s1": {},
 		"s2": {{Round: 1, Trigger: "initial", DurationMS: 300}},
 	}
-	md, _ := BuildPipelineSummary(steps, rounds)
+	md, _ := BuildPipelineSummary(steps, rounds, true)
 
 	if !strings.Contains(md, "⏭️") {
 		t.Errorf("expected skip emoji for skipped step, got:\n%s", md)
@@ -140,7 +140,7 @@ func TestBuildPipelineSummary_ExcludesPushPRCI(t *testing.T) {
 		"s3": {{Round: 1, Trigger: "initial", DurationMS: 200}},
 		"s4": {{Round: 1, Trigger: "initial", DurationMS: 300}},
 	}
-	md, _ := BuildPipelineSummary(steps, rounds)
+	md, _ := BuildPipelineSummary(steps, rounds, true)
 
 	for _, want := range []string{"**Push**"} {
 		if !strings.Contains(md, want) {
@@ -156,7 +156,7 @@ func TestBuildPipelineSummary_ExcludesPushPRCI(t *testing.T) {
 
 func TestBuildPipelineSummary_EmptySteps(t *testing.T) {
 	t.Parallel()
-	md, risk := BuildPipelineSummary(nil, nil)
+	md, risk := BuildPipelineSummary(nil, nil, true)
 	if md != "" {
 		t.Errorf("expected empty string for nil steps, got: %q", md)
 	}
@@ -174,7 +174,7 @@ func TestBuildPipelineSummary_RebaseWithConflicts(t *testing.T) {
 	rounds := map[string][]*db.StepRound{
 		"s1": {{Round: 1, Trigger: "initial", FindingsJSON: &findings, DurationMS: 2000}},
 	}
-	md, _ := BuildPipelineSummary(steps, rounds)
+	md, _ := BuildPipelineSummary(steps, rounds, true)
 
 	if !strings.Contains(md, "**Rebase**") {
 		t.Errorf("expected Rebase in output, got:\n%s", md)

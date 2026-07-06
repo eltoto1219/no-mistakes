@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -47,9 +48,19 @@ type GlobalConfig struct {
 	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
 	CITimeout            time.Duration       `yaml:"-"`
 	LogLevel             string              `yaml:"log_level"`
+	CommitFixMessage     string              `yaml:"-"`
+	HidePRSignature      bool                `yaml:"-"`
 	AutoFix              AutoFixRaw
 	Intent               IntentRaw
 	Test                 TestRaw
+}
+
+// CommitRaw is the YAML representation of commit-message settings.
+type CommitRaw struct {
+	// FixMessage is a text/template for the messages of commits the pipeline
+	// creates when committing fixes. Fields: {{.Step}} and {{.Summary}}.
+	// Empty means the built-in default messages.
+	FixMessage string `yaml:"fix_message"`
 }
 
 // globalConfigRaw is the on-disk YAML representation with duration as string.
@@ -62,6 +73,8 @@ type globalConfigRaw struct {
 	CITimeout            string              `yaml:"ci_timeout"`
 	BabysitTimeout       string              `yaml:"babysit_timeout"`
 	LogLevel             string              `yaml:"log_level"`
+	Commit               CommitRaw           `yaml:"commit"`
+	PRSignature          *bool               `yaml:"pr_signature"`
 	AutoFix              AutoFixRaw          `yaml:"auto_fix"`
 	Intent               IntentRaw           `yaml:"intent"`
 	Test                 TestRaw             `yaml:"test"`
@@ -150,11 +163,59 @@ type Config struct {
 	AgentArgsOverride    map[string][]string
 	CITimeout            time.Duration
 	LogLevel             string
-	Commands             Commands
-	IgnorePatterns       []string
-	AutoFix              AutoFix
-	Intent               Intent
-	Test                 Test
+	CommitFixMessage     string
+	// HidePRSignature is inverted from the pr_signature YAML key so the
+	// zero-value Config keeps today's behavior (signature shown).
+	HidePRSignature bool
+	Commands        Commands
+	IgnorePatterns  []string
+	AutoFix         AutoFix
+	Intent          Intent
+	Test            Test
+}
+
+// fixMessageData is the data passed to the commit.fix_message template.
+type fixMessageData struct {
+	Step    string
+	Summary string
+}
+
+// renderFixCommitMessage renders a commit.fix_message template. It errors when
+// the template does not parse, references unknown fields, or renders to a
+// whitespace-only message.
+func renderFixCommitMessage(tmplStr, step, summary string) (string, error) {
+	tmpl, err := template.New("fix_message").Parse(tmplStr)
+	if err != nil {
+		return "", fmt.Errorf("parse commit.fix_message template: %w", err)
+	}
+	var b strings.Builder
+	if err := tmpl.Execute(&b, fixMessageData{Step: step, Summary: summary}); err != nil {
+		return "", fmt.Errorf("render commit.fix_message template: %w", err)
+	}
+	msg := strings.TrimSpace(b.String())
+	if msg == "" {
+		return "", fmt.Errorf("commit.fix_message template %q renders an empty message", tmplStr)
+	}
+	return msg, nil
+}
+
+// FixCommitMessage renders the configured fix-commit message template for a
+// pipeline commit. ok is false when no template is configured or rendering
+// fails; callers keep their built-in default message in that case, so the
+// default behavior is byte-identical when commit.fix_message is unset.
+func (c *Config) FixCommitMessage(step types.StepName, summary string) (string, bool) {
+	if c == nil || c.CommitFixMessage == "" {
+		return "", false
+	}
+	if summary == "" {
+		summary = "apply fixes"
+	}
+	msg, err := renderFixCommitMessage(c.CommitFixMessage, string(step), summary)
+	if err != nil {
+		slog.Warn("failed to render commit.fix_message template, using default message", "error", err)
+		return "", false
+	}
+	return msg, true
 }
 
 // TestRaw is the YAML representation of test-step settings.
@@ -307,6 +368,16 @@ intent:
   threshold: 0.2
   slack_days: 3
   # disabled_readers: [codex]
+
+# Template for the messages of commits the pipeline creates when committing
+# fixes. Fields: {{.Step}} (review, test, lint, document, ci, push) and
+# {{.Summary}} (one-line fix summary). Unset keeps the built-in default
+# messages ("no-mistakes(<step>): <summary>").
+# commit:
+#   fix_message: "no-mistakes({{.Step}}): {{.Summary}}"
+
+# Include the "Updates from git push no-mistakes" line in PR bodies.
+# pr_signature: true
 
 # Test-step evidence artifacts (screenshots, recordings, logs the test step
 # gathers to demonstrate the change works). By default they are kept in a
@@ -692,6 +763,27 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 	if raw.LogLevel != "" {
 		cfg.LogLevel = raw.LogLevel
 	}
+	if raw.Commit.FixMessage != "" {
+		// Validate eagerly so a broken template fails config load with a clear
+		// error instead of degrading commit messages mid-pipeline.
+		fixSteps := []types.StepName{
+			types.StepReview,
+			types.StepTest,
+			types.StepLint,
+			types.StepDocument,
+			types.StepCI,
+			types.StepPush,
+		}
+		for _, step := range fixSteps {
+			if _, err := renderFixCommitMessage(raw.Commit.FixMessage, string(step), "sample summary"); err != nil {
+				return nil, fmt.Errorf("validate commit.fix_message for %s step: %w", step, err)
+			}
+		}
+		cfg.CommitFixMessage = raw.Commit.FixMessage
+	}
+	if raw.PRSignature != nil {
+		cfg.HidePRSignature = !*raw.PRSignature
+	}
 	if raw.AutoFix.CI == nil {
 		raw.AutoFix.CI = raw.AutoFix.Babysit
 	}
@@ -948,6 +1040,8 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		AgentArgsOverride:    global.AgentArgsOverride,
 		CITimeout:            global.CITimeout,
 		LogLevel:             global.LogLevel,
+		CommitFixMessage:     global.CommitFixMessage,
+		HidePRSignature:      global.HidePRSignature,
 		Commands:             repo.Commands,
 		IgnorePatterns:       repo.IgnorePatterns,
 		AutoFix:              af,

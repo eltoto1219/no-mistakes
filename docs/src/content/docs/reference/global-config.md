@@ -212,6 +212,47 @@ Daemon log verbosity.
 | Values | `debug`, `info`, `warn`, `error` |
 | Default | `info` |
 
+### commit
+
+Commit-message settings for the commits the pipeline creates when committing fixes.
+
+| | |
+|---|---|
+| Type | `object` |
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `commit.fix_message` | `string` | unset | Go `text/template` for fix-commit messages |
+
+The template receives two fields: `{{.Step}}` (the pipeline step that produced the commit: `review`, `test`, `lint`, `document`, `ci`, or `push`) and `{{.Summary}}` (the agent's one-line fix summary).
+When unset, the pipeline keeps its built-in messages (`no-mistakes(<step>): <summary>`, and `no-mistakes: apply CI fixes` / `no-mistakes: apply agent fixes` for the CI and push steps).
+
+This is useful when a repo enforces commit-message conventions.
+For example, to land fix commits as Conventional Commits `chore` entries:
+
+```yaml
+commit:
+  fix_message: "chore({{.Step}}): {{.Summary}}"
+```
+
+A template that does not parse, references unknown fields, or renders an empty message fails config loading with a clear error.
+
+### pr_signature
+
+Whether PR bodies include the "Updates from [git push no-mistakes]" attribution line in the Pipeline section.
+
+| | |
+|---|---|
+| Type | `bool` |
+| Default | `true` |
+
+Set to `false` to keep PR bodies free of no-mistakes references.
+
+:::caution
+Some repositories enforce that PRs are opened through no-mistakes by grepping the PR body for the signature string in a required CI check - no-mistakes' own `.github/workflows/no-mistakes-required.yml` does exactly this.
+Setting `pr_signature: false` globally will cause every PR you open against such a repository to fail that required check.
+:::
+
 ### auto_fix
 
 Maximum follow-up auto-fix attempts per step. Set a step to `0` to disable the follow-up auto-fix loop, so findings require manual approval.

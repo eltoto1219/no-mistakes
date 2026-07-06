@@ -58,6 +58,9 @@ func TestCIStep_CommitAndPush(t *testing.T) {
 	if upstreamSHA == headSHA {
 		t.Error("upstream should have a new commit with CI fixes")
 	}
+	if got := lastCommitMessage(t, dir); got != "no-mistakes: apply CI fixes" {
+		t.Errorf("commit message = %q, want default CI fix message", got)
+	}
 }
 
 func TestCIStep_CommitAndPushTargetsForkWhenConfigured(t *testing.T) {
