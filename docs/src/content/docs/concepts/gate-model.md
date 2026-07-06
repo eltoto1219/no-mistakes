@@ -60,8 +60,10 @@ That is a core design choice, not an implementation detail.
    AXI run objects show `awaiting_agent: parked <duration>` while a non-terminal run is parked at that gate, so a supervising agent can distinguish a waiting run from active work in one status read.
 7. After local checks pass, the push step forwards the branch to the configured push target only after verifying that the update will not discard unincorporated commits already on that target, and the PR step creates or updates the pull request.
    For GitHub fork routing, the push target is the fork and the PR base repository is the parent from `origin`.
-8. The CI step keeps watching the open PR until it is merged, closed, or its configured idle timeout elapses with no base-branch movement, and can auto-fix failures or merge conflicts when supported.
-   While it watches, the TUI and terminal title surface a `Checks passed` signal once the PR is mergeable and either checks are green or the 60-second registration grace period confirms that none are configured. `no-mistakes axi` then returns `outcome: checks-passed` with instructions to summarize the run and list any pipeline fixes, so agents stop and ask you to review and merge it.
+8. The CI step keeps watching an open PR that has reported CI checks until it is merged, closed, or its configured idle timeout elapses with no base-branch movement, and can auto-fix failures or merge conflicts when supported.
+   A PR that never reports a CI check completes the step after the three-minute registration window, including when `ci_timeout` is `unlimited`.
+   While the step watches, the TUI and terminal title surface a `Checks passed` signal once the PR is mergeable and its checks are green. `no-mistakes axi` then returns `outcome: checks-passed` with instructions to summarize the run and list any pipeline fixes, so agents stop and ask you to review and merge it.
+   If previously observed checks disappear, the ready signal remains and the step continues monitoring until the PR is merged or closed.
 
 **Key design decisions:**
 

@@ -79,7 +79,8 @@ agent_args_override:
 # mergeability) with no base-branch movement before giving up. Each base-branch
 # advance re-arms the timer, so an actively-updated green PR keeps its monitor.
 # Use "unlimited" (or aliases "none", "off", "never", or any non-positive
-# duration) to monitor until the PR is merged, closed, or aborted.
+# duration) to disable the idle timeout after CI checks have been observed.
+# A PR that never reports a check still completes after three minutes.
 ci_timeout: "168h"  # any Go duration string, or an unlimited keyword
 
 # Daemon log verbosity.

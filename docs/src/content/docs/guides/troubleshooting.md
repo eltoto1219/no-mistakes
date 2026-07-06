@@ -209,27 +209,28 @@ Symptom: CI step keeps monitoring an open PR longer than expected, or pauses aft
 `ci_timeout` defaults to `168h` (7 days) and is an idle timeout.
 It re-arms whenever the upstream default branch advances, so an active long-lived PR keeps being watched.
 If the provider later reports an actual GitHub, GitLab, or Azure DevOps merge conflict, the CI auto-fix path rebases and re-pushes the branch; a clean behind PR needs no command.
-If the PR never reports any CI checks at all (for example, a repository or fork with no CI configured), the CI step completes on its own after a few minutes instead of monitoring until merge.
+If the PR never reports any CI checks at all (for example, a repository or fork with no CI configured), the CI step completes after the three-minute registration window instead of monitoring until merge.
 Set it in `~/.no-mistakes/config.yaml` to choose a different idle window:
 
 ```yaml
 ci_timeout: "24h"
 ```
 
-Set it to `unlimited` to monitor until the PR is merged, closed, or aborted:
+Set it to `unlimited` to disable the idle timeout after checks have been observed:
 
 ```yaml
 ci_timeout: "unlimited"
 ```
 
 `none`, `off`, `never`, `0`, and other non-positive durations are accepted too.
+The three-minute completion for a PR that never reports a check still applies when the timeout is unlimited.
 
 Older config files may still contain an explicit `ci_timeout: "4h"` value.
 Update that value if you want the newer default behavior.
 
 The CI step keeps monitoring while the PR remains open, even after checks are currently healthy, because a later default-branch update can make the PR conflict or rerun CI.
 Once checks are green and the PR is mergeable, the CI panel shows `✓ Checks passed` and the terminal title switches to `Checks passed`, so you can tell when to go merge the PR.
-For a GitHub repository with no configured checks, the step waits 60 seconds for checks to register, then shows the same ready signal and continues monitoring the open PR.
+If previously observed checks disappear, the ready signal remains and the step continues monitoring until the PR is merged or closed.
 The signal clears automatically if checks start re-running or a new failure appears.
 If the PR is still open at the timeout, the step pauses for approval with findings for the open monitoring state or any known unresolved failures.
 You can approve, fix, or skip from the TUI or `no-mistakes axi respond`.
