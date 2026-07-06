@@ -36,8 +36,10 @@ type testingSummaryOptions struct {
 	repoRoot             string
 }
 
-// BuildPipelineSummary produces a deterministic markdown section from step results and rounds.
-func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound) (string, string) {
+// BuildPipelineSummary produces a deterministic markdown section from step
+// results and rounds. includeSignature controls the "Updates from git push
+// no-mistakes" attribution line (pr_signature in the global config).
+func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound, includeSignature bool) (string, string) {
 	if len(steps) == 0 {
 		return "", ""
 	}
@@ -61,8 +63,10 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 
 	var b strings.Builder
 	b.WriteString("## Pipeline\n\n")
-	b.WriteString(noMistakesPRSignature)
-	b.WriteString("\n\n")
+	if includeSignature {
+		b.WriteString(noMistakesPRSignature)
+		b.WriteString("\n\n")
+	}
 	for i, detail := range detailBlocks {
 		if i > 0 {
 			b.WriteString("\n")

@@ -8,6 +8,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // autoFixCI runs the agent to fix CI failures and/or merge conflicts, then
@@ -129,7 +130,11 @@ func (s *CIStep) commitAndPush(sctx *pipeline.StepContext) (bool, error) {
 	if _, err := stepGitRun(sctx, "add", "-A"); err != nil {
 		return false, fmt.Errorf("stage CI changes: %w", err)
 	}
-	if _, err := stepGitRun(sctx, "commit", "-m", "no-mistakes: apply CI fixes"); err != nil {
+	commitMessage, ok := sctx.Config.FixCommitMessage(types.StepCI, "apply CI fixes")
+	if !ok {
+		commitMessage = "no-mistakes: apply CI fixes"
+	}
+	if _, err := stepGitRun(sctx, "commit", "-m", commitMessage); err != nil {
 		return false, fmt.Errorf("commit: %w", err)
 	}
 	headSHA, err := stepGitHeadSHA(sctx)

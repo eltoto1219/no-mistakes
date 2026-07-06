@@ -225,7 +225,8 @@ func (s *PRStep) buildPipelineSection(sctx *pipeline.StepContext) (string, strin
 		rounds[sr.ID] = r
 	}
 
-	pipelineMD, riskLine := BuildPipelineSummary(steps, rounds)
+	includeSignature := sctx.Config == nil || !sctx.Config.HidePRSignature
+	pipelineMD, riskLine := BuildPipelineSummary(steps, rounds, includeSignature)
 	testingMD := BuildTestingSummaryForPR(steps, rounds, sctx.Repo.UpstreamURL, sctx.Run.HeadSHA, sctx.WorkDir)
 	return pipelineMD, riskLine, testingMD
 }

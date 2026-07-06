@@ -57,7 +57,10 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 	if summary == "" {
 		summary = fallbackSummary
 	}
-	commitMessage := deterministicFixCommitMessage(stepName, summary)
+	commitMessage, ok := sctx.Config.FixCommitMessage(stepName, summary)
+	if !ok {
+		commitMessage = deterministicFixCommitMessage(stepName, summary)
+	}
 	if _, err := git.Run(ctx, sctx.WorkDir, "commit", "-m", commitMessage); err != nil {
 		return fmt.Errorf("commit %s changes: %w", stepName, err)
 	}

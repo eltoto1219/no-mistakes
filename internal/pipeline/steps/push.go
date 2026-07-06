@@ -42,7 +42,11 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		if _, err := git.Run(ctx, sctx.WorkDir, "add", "-A"); err != nil {
 			return nil, fmt.Errorf("stage agent changes: %w", err)
 		}
-		_, err := git.Run(ctx, sctx.WorkDir, "commit", "-m", "no-mistakes: apply agent fixes")
+		commitMessage, ok := sctx.Config.FixCommitMessage(types.StepPush, "apply agent fixes")
+		if !ok {
+			commitMessage = "no-mistakes: apply agent fixes"
+		}
+		_, err := git.Run(ctx, sctx.WorkDir, "commit", "-m", commitMessage)
 		if err != nil {
 			return nil, fmt.Errorf("commit agent changes: %w", err)
 		}
