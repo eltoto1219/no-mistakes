@@ -148,13 +148,13 @@ When yolo mode is on, the footer changes from `y yolo` to `y end yolo`.
 | `Ctrl+d` / `Ctrl+u` | Half-page down / up |
 | `n` / `p` | Next / previous finding |
 
-### Actions (when a step is awaiting approval)
+### Actions
 
 | Key | Action |
 |---|---|
-| `a` | Approve - continue to next step |
-| `f` | Fix - send selected findings to agent for fixing |
-| `s` | Skip - skip this step and continue |
+| `a` | Approve - continue to next step (when awaiting approval) |
+| `f` | Fix - send selected findings to agent for fixing (when awaiting approval) |
+| `s` | Skip - skip this step and continue (when awaiting approval) |
 | `x` | Abort - press twice to confirm (first press shows warning) |
 | `i` | View or edit the run's intent (any time while the run is active) |
 | `o` | Open PR URL in browser (when available) |
