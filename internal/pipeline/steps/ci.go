@@ -43,8 +43,10 @@ type CIStep struct {
 	lastFixedChecks          string               // sorted check names from last fix attempt, to avoid re-fixing
 	lastFixedCompletedAt     map[string]time.Time // failing check completion times seen before the last fix attempt
 	ciFixAttempts            int                  // number of CI auto-fix attempts made
-	noChecksCompletionWindow time.Duration        // wait for checks to register before completing a checkless PR (0 = default 3m)
-	pollIntervalOverride     time.Duration        // if set, overrides computed poll interval (for testing)
+	checksSeen               bool
+	emptyChecksSince         time.Time
+	noChecksCompletionWindow time.Duration // wait for checks to register before completing a checkless PR (0 = default 3m)
+	pollIntervalOverride     time.Duration // if set, overrides computed poll interval (for testing)
 	waitForNextPoll          func(context.Context, time.Duration) error
 	now                      func() time.Time
 	// baseBranchTip resolves the current tip SHA of the upstream default
@@ -133,13 +135,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	started := now()
 	// timeoutAnchor is the point the idle timeout is measured from. It re-arms
 	// to now() whenever the base branch advances, while started stays fixed so
-	// poll-interval and grace-period pacing are unaffected by re-arming.
+	// poll-interval pacing is unaffected by re-arming.
 	timeoutAnchor := started
 	lastBaseTip := ""
-	// checksSeen guards the no-checks completion: complete only when the PR
-	// never reported a single check, so a PR whose observed checks transiently
-	// disappear keeps the merge-or-close monitor instead of completing early.
-	checksSeen := false
 	manualFixAttempted := false
 	mergeabilityBlockedReason := ""
 	timeoutFailingChecks := []string{}
@@ -187,7 +185,6 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			}
 		}
 
-		elapsed := now().Sub(started)
 		if !unlimited && now().Sub(timeoutAnchor) >= timeout {
 			return timeoutOutcome()
 		}
@@ -232,11 +229,14 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 		ciFixLimit := sctx.Config.AutoFix.CI
 		checks, err := host.GetChecks(ctx, pr)
 		if err != nil {
+			s.emptyChecksSince = time.Time{}
 			lastMonitorLog = ""
 			sctx.Log(fmt.Sprintf("warning: could not check CI: %v", err))
 		} else {
 			if len(checks) > 0 {
-				checksSeen = true
+				s.checksSeen = true
+			} else if s.emptyChecksSince.IsZero() {
+				s.emptyChecksSince = now()
 			}
 			pending := hasPendingChecks(checks)
 			failing := failingCheckNames(checks)
@@ -326,12 +326,12 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					// so a PR that passed checks and starts re-running clears the
 					// previous passed-checks signal instead of looking stale.
 					lastMonitorLog = logCIMonitorStatus(sctx, ciChecksRunningMsg, lastMonitorLog)
-				case len(checks) == 0 && !checksSeen:
+				case len(checks) == 0 && !s.checksSeen:
 					// The PR has never reported a check. Give the provider a
 					// window to register queued checks; once it elapses there
 					// is no CI to monitor, so the step completes rather than
 					// watching until merge.
-					if elapsed >= s.noChecksWindow() {
+					if now().Sub(s.emptyChecksSince) >= s.noChecksWindow() {
 						sctx.Log(ciNoChecksCompletedMsg)
 						return &pipeline.StepOutcome{}, nil
 					}

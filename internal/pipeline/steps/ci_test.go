@@ -595,6 +595,95 @@ func TestCIStep_KeepsMonitoringWhenObservedChecksDisappear(t *testing.T) {
 	}
 }
 
+func TestCIStep_CheckErrorRestartsNoChecksCompletionWindow(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	env := fakeCIGHSequence(t, "OPEN", []string{"invalid", `[]`})
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sctx.Ctx = ctx
+
+	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	current := started
+	waits := 0
+	step := &CIStep{
+		noChecksCompletionWindow: 50 * time.Millisecond,
+		pollIntervalOverride:     30 * time.Millisecond,
+		now:                      func() time.Time { return current },
+		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
+			waits++
+			if waits == 1 {
+				current = started.Add(time.Second)
+				return nil
+			}
+			cancel()
+			return ctx.Err()
+		},
+	}
+
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected first successful empty poll to restart the window, got %v", err)
+	}
+	if waits != 2 {
+		t.Fatalf("expected a wait after the first successful empty poll, got %d waits", waits)
+	}
+}
+
+func TestCIStep_RemembersObservedChecksAcrossExecuteCalls(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	env := fakeCIGHSequence(t, "OPEN", []string{
+		`[{"name":"build","state":"SUCCESS","bucket":"pass"}]`,
+		`[]`,
+	})
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+
+	current := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	step := &CIStep{
+		noChecksCompletionWindow: 50 * time.Millisecond,
+		pollIntervalOverride:     30 * time.Millisecond,
+		now:                      func() time.Time { return current },
+	}
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	sctx.Ctx = firstCtx
+	step.waitForNextPoll = func(ctx context.Context, interval time.Duration) error {
+		cancelFirst()
+		return ctx.Err()
+	}
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected first execution to stop after observing checks, got %v", err)
+	}
+
+	secondStarted := current
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	sctx.Ctx = secondCtx
+	step.waitForNextPoll = func(ctx context.Context, interval time.Duration) error {
+		current = current.Add(interval)
+		if current.Sub(secondStarted) >= 90*time.Millisecond {
+			cancelSecond()
+			return ctx.Err()
+		}
+		return nil
+	}
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected monitoring to continue across re-execution after checks disappear, got %v", err)
+	}
+}
+
 func TestCIStep_LogsWaitingForChecksDuringRegistrationWindow(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
