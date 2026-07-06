@@ -130,6 +130,24 @@ Each `axi respond` blocks until the next gate, CI-ready decision point, or final
 If it returns another `gate:`, answer that gate; do not idle-wait for the run to move forward by itself.
 The same successful-output reporting instructions apply to `axi respond` results.
 
+## no-mistakes axi intent
+
+Show the intent attached to the resolved run for the current branch, or replace the intent on that branch's active run.
+
+```sh
+no-mistakes axi intent
+no-mistakes axi intent --set "the corrected intent"
+```
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--set` | `string` | (none) | Replace the active run's intent with non-empty text |
+
+Reading works without the daemon and uses the same current-branch run resolution as `axi status`.
+Editing requires an active run and a checked-out branch; completed runs cannot be changed.
+An edit becomes authoritative over transcript inference, including an inference already in progress.
+Steps that have not run yet and fix rounds of the step currently parked at a gate use the edited intent without restarting the run.
+
 ## no-mistakes axi status
 
 Show a run, preferring the current branch's active or most recent run before falling back to repo-wide active or recent runs.

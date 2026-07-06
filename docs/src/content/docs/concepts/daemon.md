@@ -48,6 +48,7 @@ no-mistakes attach
 no-mistakes rerun
 no-mistakes axi run
 no-mistakes axi respond
+no-mistakes axi intent --set "the corrected intent"
 
 # Resets the daemon after replacing the binary
 no-mistakes update
