@@ -248,6 +248,11 @@ Whether PR bodies include the "Updates from [git push no-mistakes]" attribution 
 
 Set to `false` to keep PR bodies free of no-mistakes references.
 
+:::caution
+Some repositories enforce that PRs are opened through no-mistakes by grepping the PR body for the signature string in a required CI check - no-mistakes' own `.github/workflows/no-mistakes-required.yml` does exactly this.
+Setting `pr_signature: false` globally will cause every PR you open against such a repository to fail that required check.
+:::
+
 ### auto_fix
 
 Maximum follow-up auto-fix attempts per step. Set a step to `0` to disable the follow-up auto-fix loop, so findings require manual approval.
