@@ -133,7 +133,7 @@ func TestCIStep_MergeConflictAndCIFailure_FixPromptIncludesBoth(t *testing.T) {
 	}
 }
 
-func TestCIStep_MergeConflictOnly_AutoFix(t *testing.T) {
+func TestCIStep_MergeConflictOnly_AutoFixRestartsNoChecksWindow(t *testing.T) {
 	t.Parallel()
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
@@ -157,8 +157,7 @@ func TestCIStep_MergeConflictOnly_AutoFix(t *testing.T) {
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	// All checks pass, but merge conflict
-	checksJSON := `[{"name":"build","state":"SUCCESS","bucket":"pass"},{"name":"test","state":"SUCCESS","bucket":"pass"}]`
+	checksJSON := `[]`
 	env := fakeCIGHMergeable(t, "OPEN", checksJSON, "CONFLICTING")
 
 	agentCalled := false
@@ -189,7 +188,10 @@ func TestCIStep_MergeConflictOnly_AutoFix(t *testing.T) {
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
+	current := time.Date(2026, time.January, 1, 12, 5, 0, 0, time.UTC)
 	step := &CIStep{
+		emptyChecksSince: current.Add(-defaultNoChecksCompletionWindow),
+		now:              func() time.Time { return current },
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
 			cancel()
 			return ctx.Err()
@@ -199,6 +201,9 @@ func TestCIStep_MergeConflictOnly_AutoFix(t *testing.T) {
 
 	if !agentCalled {
 		t.Fatal("expected agent to be called to resolve merge conflict")
+	}
+	if !step.emptyChecksSince.IsZero() {
+		t.Fatalf("expected merge-conflict auto-fix push to restart no-checks window, got %v", step.emptyChecksSince)
 	}
 	if strings.Contains(capturedPrompt, "You MUST produce file changes that fix the failing checks") {
 		t.Fatalf("merge-conflict-only prompt should not require file changes for failing checks, got:\n%s", capturedPrompt)

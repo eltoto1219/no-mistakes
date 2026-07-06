@@ -163,7 +163,7 @@ Run the pipeline and decide on its findings as they come up:
      (the PR link is in the `help` line). no-mistakes keeps monitoring the PR
      in the background until it is merged, closed, or its configured idle
      timeout elapses, so a human can watch it in the TUI.
-   - `passed` - the changes cleared the gate and the PR was merged or closed.
+   - `passed` - the changes cleared the gate. The PR was merged or closed, or the CI step completed because the repository has no CI configured (PR is still open in that case; check the `help` line for the PR link and ask the user to review and merge it).
    - `failed` or `cancelled` - they did not; read the output and address it.
      Fix whatever the output points at (a failing test, a lint error, a finding
      you skipped), commit the fix on the same feature branch, then drive the

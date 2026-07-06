@@ -198,7 +198,9 @@ So an actively-updated green PR keeps its monitor no matter how long it stays op
 If it later develops an actual GitHub, GitLab, or Azure DevOps merge conflict, the CI auto-fix path rebases and re-pushes it, while a clean behind PR needs no command.
 A genuinely idle/abandoned PR is still reaped after the timeout elapses.
 
-Set it to `unlimited` (`none`, `off`, and `never` are accepted aliases), `0`, or any non-positive duration to monitor until the PR is merged, closed, or the run is aborted with `no-mistakes axi abort --run <id>`.
+Set it to `unlimited` (`none`, `off`, and `never` are accepted aliases), `0`, or any non-positive duration to disable timeout-based termination.
+A PR that never reports a CI check still completes the step after the three-minute registration window.
+After checks have been observed, the monitor continues until the PR is merged, closed, or the run is aborted with `no-mistakes axi abort --run <id>`, even if those checks later disappear.
 
 Legacy alias: `babysit_timeout`.
 

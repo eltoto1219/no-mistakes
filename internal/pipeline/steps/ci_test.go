@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 )
@@ -471,7 +472,7 @@ func TestCIStep_OpenPRKeepsMonitoringAfterChecksPass(t *testing.T) {
 	}
 }
 
-func TestCIStep_EmptyChecksWaitsDuringGracePeriod(t *testing.T) {
+func TestCIStep_CompletesWhenNoChecksRegisterWithinWindow(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
@@ -483,7 +484,7 @@ func TestCIStep_EmptyChecksWaitsDuringGracePeriod(t *testing.T) {
 	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
 	sctx.Run.PRURL = &prURL
-	sctx.Config.CITimeout = 5 * time.Second
+	sctx.Config.CITimeout = 10 * time.Second
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
@@ -492,17 +493,84 @@ func TestCIStep_EmptyChecksWaitsDuringGracePeriod(t *testing.T) {
 	current := started
 	var waits []time.Duration
 
+	step := &CIStep{
+		noChecksCompletionWindow: 200 * time.Millisecond,
+		pollIntervalOverride:     75 * time.Millisecond,
+		now:                      func() time.Time { return current },
+		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
+			waits = append(waits, interval)
+			current = current.Add(interval)
+			return nil
+		},
+	}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatalf("expected completion when no checks ever registered, got %v", err)
+	}
+	if outcome == nil || outcome.Skipped {
+		t.Fatalf("expected a successful (non-skipped) outcome, got %+v", outcome)
+	}
+	if elapsed := current.Sub(started); elapsed < 200*time.Millisecond {
+		t.Errorf("CI completed in %v, expected to wait at least the 200ms no-checks window", elapsed)
+	}
+	if len(waits) != 3 {
+		t.Fatalf("expected 3 registration-window waits before completing, got %v", waits)
+	}
+	for _, l := range logs {
+		if strings.Contains(l, "CI timeout reached") {
+			t.Fatal("expected no-checks completion before CI timeout")
+		}
+	}
+	foundWaiting, foundCompleted := false, false
+	for _, l := range logs {
+		if strings.Contains(l, "waiting for checks to register") {
+			foundWaiting = true
+		}
+		if l == cimonitor.NoChecksCompletedMsg {
+			foundCompleted = true
+		}
+	}
+	if !foundWaiting {
+		t.Fatalf("expected registration-window waiting log, got: %v", logs)
+	}
+	if !foundCompleted {
+		t.Fatalf("expected no-checks completion log, got: %v", logs)
+	}
+}
+
+func TestCIStep_KeepsMonitoringWhenObservedChecksDisappear(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	// First poll reports a passing check; every later poll reports none.
+	env := fakeCIGHSequence(t, "OPEN", []string{
+		`[{"name":"build","state":"SUCCESS","bucket":"pass"}]`,
+		`[]`,
+	})
+
+	prURL := "https://github.com/test/repo/pull/42"
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+
+	var logs []string
+	sctx.Log = func(s string) { logs = append(logs, s) }
+
+	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	current := started
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sctx.Ctx = ctx
 
 	step := &CIStep{
-		checksGracePeriod:    200 * time.Millisecond,
-		pollIntervalOverride: 75 * time.Millisecond,
-		now:                  func() time.Time { return current },
+		noChecksCompletionWindow: 50 * time.Millisecond,
+		pollIntervalOverride:     30 * time.Millisecond,
+		now:                      func() time.Time { return current },
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
-			waits = append(waits, interval)
-			if current.Sub(started) >= 200*time.Millisecond {
+			if current.Sub(started) >= 300*time.Millisecond {
 				cancel()
 				return ctx.Err()
 			}
@@ -510,39 +578,113 @@ func TestCIStep_EmptyChecksWaitsDuringGracePeriod(t *testing.T) {
 			return nil
 		},
 	}
-	_, err := step.Execute(sctx)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected cancellation after grace-period monitoring continued, got %v", err)
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected monitoring to continue when observed checks disappear, got %v", err)
 	}
-	if elapsed := current.Sub(started); elapsed < 200*time.Millisecond {
-		t.Errorf("CI exited in %v, expected to wait at least 200ms grace period", elapsed)
-	}
-	if len(waits) != 4 {
-		t.Fatalf("expected 3 grace-period waits plus one continued-monitoring wait, got %v", waits)
-	}
-	for _, interval := range waits[:3] {
-		if interval != 75*time.Millisecond {
-			t.Fatalf("expected 75ms waits during grace period, got %v", waits)
-		}
-	}
+	foundStillMonitoring := false
 	for _, l := range logs {
-		if strings.Contains(l, "CI timeout reached") {
-			t.Fatal("expected cancellation before CI timeout")
+		if l == cimonitor.NoChecksCompletedMsg {
+			t.Fatalf("must not complete a PR whose checks were observed and disappeared; logs: %v", logs)
+		}
+		if l == cimonitor.NoChecksPassedMsg {
+			foundStillMonitoring = true
 		}
 	}
-	found := false
-	for _, l := range logs {
-		if strings.Contains(l, "no CI checks reported - still monitoring until merged or closed") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected continued-monitoring log after grace period, got: %v", logs)
+	if !foundStillMonitoring {
+		t.Fatalf("expected continued-monitoring log after checks disappeared, got: %v", logs)
 	}
 }
 
-func TestCIStep_LogsWaitingForChecksDuringGracePeriod(t *testing.T) {
+func TestCIStep_CheckErrorRestartsNoChecksCompletionWindow(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	env := fakeCIGHSequence(t, "OPEN", []string{"invalid", `[]`})
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sctx.Ctx = ctx
+
+	started := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	current := started
+	waits := 0
+	step := &CIStep{
+		noChecksCompletionWindow: 50 * time.Millisecond,
+		pollIntervalOverride:     30 * time.Millisecond,
+		now:                      func() time.Time { return current },
+		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
+			waits++
+			if waits == 1 {
+				current = started.Add(time.Second)
+				return nil
+			}
+			cancel()
+			return ctx.Err()
+		},
+	}
+
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected first successful empty poll to restart the window, got %v", err)
+	}
+	if waits != 2 {
+		t.Fatalf("expected a wait after the first successful empty poll, got %d waits", waits)
+	}
+}
+
+func TestCIStep_RemembersObservedChecksAcrossExecuteCalls(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	env := fakeCIGHSequence(t, "OPEN", []string{
+		`[{"name":"build","state":"SUCCESS","bucket":"pass"}]`,
+		`[]`,
+	})
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+
+	current := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	step := &CIStep{
+		noChecksCompletionWindow: 50 * time.Millisecond,
+		pollIntervalOverride:     30 * time.Millisecond,
+		now:                      func() time.Time { return current },
+	}
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	sctx.Ctx = firstCtx
+	step.waitForNextPoll = func(ctx context.Context, interval time.Duration) error {
+		cancelFirst()
+		return ctx.Err()
+	}
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected first execution to stop after observing checks, got %v", err)
+	}
+
+	secondStarted := current
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	sctx.Ctx = secondCtx
+	step.waitForNextPoll = func(ctx context.Context, interval time.Duration) error {
+		current = current.Add(interval)
+		if current.Sub(secondStarted) >= 90*time.Millisecond {
+			cancelSecond()
+			return ctx.Err()
+		}
+		return nil
+	}
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected monitoring to continue across re-execution after checks disappear, got %v", err)
+	}
+}
+
+func TestCIStep_LogsWaitingForChecksDuringRegistrationWindow(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
@@ -564,9 +706,9 @@ func TestCIStep_LogsWaitingForChecksDuringGracePeriod(t *testing.T) {
 
 	current := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	step := &CIStep{
-		checksGracePeriod:    50 * time.Millisecond,
-		pollIntervalOverride: 10 * time.Millisecond,
-		now:                  func() time.Time { return current },
+		noChecksCompletionWindow: 50 * time.Millisecond,
+		pollIntervalOverride:     10 * time.Millisecond,
+		now:                      func() time.Time { return current },
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
 			cancel()
 			return ctx.Err()
@@ -588,7 +730,7 @@ func TestCIStep_LogsWaitingForChecksDuringGracePeriod(t *testing.T) {
 	}
 }
 
-func TestCIStep_NonEmptyPassingChecksSkipGracePeriodAndContinueMonitoring(t *testing.T) {
+func TestCIStep_NonEmptyPassingChecksContinueMonitoring(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
@@ -611,7 +753,7 @@ func TestCIStep_NonEmptyPassingChecksSkipGracePeriodAndContinueMonitoring(t *tes
 
 	pollCount := 0
 	step := &CIStep{
-		checksGracePeriod: 10 * time.Second,
+		noChecksCompletionWindow: 10 * time.Second,
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
 			pollCount++
 			cancel()
