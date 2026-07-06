@@ -209,6 +209,7 @@ Symptom: CI step keeps monitoring an open PR longer than expected, or pauses aft
 `ci_timeout` defaults to `168h` (7 days) and is an idle timeout.
 It re-arms whenever the upstream default branch advances, so an active long-lived PR keeps being watched.
 If the provider later reports an actual GitHub, GitLab, or Azure DevOps merge conflict, the CI auto-fix path rebases and re-pushes the branch; a clean behind PR needs no command.
+If the PR never reports any CI checks at all (for example, a repository or fork with no CI configured), the CI step completes on its own after a few minutes instead of monitoring until merge.
 Set it in `~/.no-mistakes/config.yaml` to choose a different idle window:
 
 ```yaml

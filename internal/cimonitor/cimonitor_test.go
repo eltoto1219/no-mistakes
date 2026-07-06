@@ -51,6 +51,11 @@ func TestChecksPassed(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "no checks registered completes",
+			logs: []string{NoChecksCompletedMsg},
+			want: true,
+		},
+		{
 			name: "still monitoring before checks pass",
 			logs: []string{"monitoring CI for PR #42 (timeout: 4h)..."},
 			want: false,

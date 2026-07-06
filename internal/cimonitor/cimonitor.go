@@ -18,10 +18,14 @@ const (
 	// not yet merged or closed, so the monitor keeps watching subject to its
 	// configured timeout.
 	ChecksPassedMsg = "all CI checks passed - still monitoring until merged or closed"
-	// NoChecksPassedMsg is logged when the PR reports no CI checks at all and
-	// the monitor keeps watching for a merge or close, subject to its
-	// configured timeout.
+	// NoChecksPassedMsg is logged when the PR previously reported CI checks
+	// but currently reports none, so the monitor keeps watching for a merge
+	// or close, subject to its configured timeout.
 	NoChecksPassedMsg = "no CI checks reported - still monitoring until merged or closed"
+	// NoChecksCompletedMsg is logged when the PR never reported any CI checks
+	// for the whole no-checks completion window: there is nothing to monitor,
+	// so the CI step completes instead of watching until merge.
+	NoChecksCompletedMsg = "no CI checks registered - nothing to monitor, completing"
 	// ChecksRunningMsg is logged when checks are (re-)running with no failures
 	// yet, which clears any previous passed-checks state.
 	ChecksRunningMsg = "CI checks running, waiting for results..."
@@ -59,7 +63,7 @@ func ParseActivity(logs []string) Activity {
 			a.AutoFixing = true
 			a.Ready = false
 			a.LastEvent = line
-		case line == ChecksPassedMsg || line == NoChecksPassedMsg:
+		case line == ChecksPassedMsg || line == NoChecksPassedMsg || line == NoChecksCompletedMsg:
 			a.AutoFixing = false
 			a.Ready = true
 			a.LastEvent = line

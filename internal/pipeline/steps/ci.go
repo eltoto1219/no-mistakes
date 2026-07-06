@@ -15,7 +15,12 @@ import (
 )
 
 const (
-	defaultChecksGracePeriod          = 60 * time.Second
+	// defaultNoChecksCompletionWindow is how long the monitor waits for a PR's
+	// CI checks to register before concluding the repo has no CI for this PR
+	// and completing the step. Providers can take a while to register queued
+	// checks after a push, so this errs long; a repo with any CI reports its
+	// checks well within it.
+	defaultNoChecksCompletionWindow   = 3 * time.Minute
 	defaultBaseBranchTipResolveWindow = 30 * time.Second
 )
 
@@ -24,21 +29,24 @@ const (
 // checks that are still running. The canonical strings live in cimonitor so all
 // producers and consumers agree on them.
 const (
-	ciChecksPassedMsg   = cimonitor.ChecksPassedMsg
-	ciNoChecksPassedMsg = cimonitor.NoChecksPassedMsg
-	ciChecksRunningMsg  = cimonitor.ChecksRunningMsg
+	ciChecksPassedMsg      = cimonitor.ChecksPassedMsg
+	ciNoChecksPassedMsg    = cimonitor.NoChecksPassedMsg
+	ciNoChecksCompletedMsg = cimonitor.NoChecksCompletedMsg
+	ciChecksRunningMsg     = cimonitor.ChecksRunningMsg
 )
 
 // CIStep monitors an open PR until it is merged, closed, or its configured idle
-// timeout elapses, auto-fixing CI failures.
+// timeout elapses, auto-fixing CI failures. When the PR never reports any CI
+// checks within the no-checks completion window (the repo has no CI for this
+// PR), the step completes instead of monitoring until merge.
 type CIStep struct {
-	lastFixedChecks      string               // sorted check names from last fix attempt, to avoid re-fixing
-	lastFixedCompletedAt map[string]time.Time // failing check completion times seen before the last fix attempt
-	ciFixAttempts        int                  // number of CI auto-fix attempts made
-	checksGracePeriod    time.Duration        // minimum wait before trusting empty CI checks (0 = default 60s)
-	pollIntervalOverride time.Duration        // if set, overrides computed poll interval (for testing)
-	waitForNextPoll      func(context.Context, time.Duration) error
-	now                  func() time.Time
+	lastFixedChecks          string               // sorted check names from last fix attempt, to avoid re-fixing
+	lastFixedCompletedAt     map[string]time.Time // failing check completion times seen before the last fix attempt
+	ciFixAttempts            int                  // number of CI auto-fix attempts made
+	noChecksCompletionWindow time.Duration        // wait for checks to register before completing a checkless PR (0 = default 3m)
+	pollIntervalOverride     time.Duration        // if set, overrides computed poll interval (for testing)
+	waitForNextPoll          func(context.Context, time.Duration) error
+	now                      func() time.Time
 	// baseBranchTip resolves the current tip SHA of the upstream default
 	// branch. The bool is false when the SHA is a fallback/unknown value and
 	// must not re-arm the timeout. Overridable for testing; defaults to
@@ -48,11 +56,11 @@ type CIStep struct {
 
 func (s *CIStep) Name() types.StepName { return types.StepCI }
 
-func (s *CIStep) gracePeriod() time.Duration {
-	if s.checksGracePeriod > 0 {
-		return s.checksGracePeriod
+func (s *CIStep) noChecksWindow() time.Duration {
+	if s.noChecksCompletionWindow > 0 {
+		return s.noChecksCompletionWindow
 	}
-	return defaultChecksGracePeriod
+	return defaultNoChecksCompletionWindow
 }
 
 func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
@@ -128,6 +136,10 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	// poll-interval and grace-period pacing are unaffected by re-arming.
 	timeoutAnchor := started
 	lastBaseTip := ""
+	// checksSeen guards the no-checks completion: complete only when the PR
+	// never reported a single check, so a PR whose observed checks transiently
+	// disappear keeps the merge-or-close monitor instead of completing early.
+	checksSeen := false
 	manualFixAttempted := false
 	mergeabilityBlockedReason := ""
 	timeoutFailingChecks := []string{}
@@ -223,6 +235,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			lastMonitorLog = ""
 			sctx.Log(fmt.Sprintf("warning: could not check CI: %v", err))
 		} else {
+			if len(checks) > 0 {
+				checksSeen = true
+			}
 			pending := hasPendingChecks(checks)
 			failing := failingCheckNames(checks)
 			sort.Strings(failing)
@@ -311,10 +326,16 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					// so a PR that passed checks and starts re-running clears the
 					// previous passed-checks signal instead of looking stale.
 					lastMonitorLog = logCIMonitorStatus(sctx, ciChecksRunningMsg, lastMonitorLog)
-				case len(checks) == 0 && elapsed < s.gracePeriod():
-					// CI checks may not be registered yet, keep polling.
-					lastMonitorLog = ""
-					sctx.Log("no CI checks reported yet, waiting for checks to register...")
+				case len(checks) == 0 && !checksSeen:
+					// The PR has never reported a check. Give the provider a
+					// window to register queued checks; once it elapses there
+					// is no CI to monitor, so the step completes rather than
+					// watching until merge.
+					if elapsed >= s.noChecksWindow() {
+						sctx.Log(ciNoChecksCompletedMsg)
+						return &pipeline.StepOutcome{}, nil
+					}
+					lastMonitorLog = logCIMonitorStatus(sctx, "no CI checks reported yet, waiting for checks to register...", lastMonitorLog)
 				case len(checks) == 0:
 					lastMonitorLog = logCIMonitorStatus(sctx, ciNoChecksPassedMsg, lastMonitorLog)
 				default:
