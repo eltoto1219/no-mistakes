@@ -119,6 +119,13 @@ asked for that might otherwise look surprising in the diff. A few sentences to a
 short paragraph is normal - write down what you learned from the conversation
 that a reviewer reading only the diff would not know.
 
+If the intent turns out wrong or stale while the run is active (e.g. it was
+inferred from the wrong session, or the goal was refined mid-run), correct it
+with ` + "`no-mistakes axi intent --set \"...\"`" + ` instead of restarting the run:
+steps that have not executed yet, and fix rounds of the step currently parked
+at a gate, use the edited intent. ` + "`no-mistakes axi intent`" + ` shows the
+current one.
+
 ## Validate and decide
 
 Run the pipeline and decide on its findings as they come up:
@@ -264,6 +271,8 @@ run without checking back.
 ` + "```sh" + `
 no-mistakes axi               # home view: current branch, active runs, next steps
 no-mistakes axi status        # full detail of the resolved run
+no-mistakes axi intent        # show the intent attached to the current branch's run
+no-mistakes axi intent --set "<corrected intent>"   # replace a wrong or stale intent on the active run
 no-mistakes axi logs --step <name> --full   # full log output of one step
 no-mistakes axi abort         # cancel the current-branch active run
 no-mistakes axi abort --run <id>   # cancel a specific run by id (works outside its worktree)

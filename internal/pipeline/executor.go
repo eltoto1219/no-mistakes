@@ -256,6 +256,15 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 
 	// Execute with possible fix loop
 	for {
+		// Re-read the persisted intent each round so an edit made while the
+		// run was parked at a gate (`axi intent --set`) reaches this step's
+		// prompt and every later one. Best-effort: on a read failure the
+		// last-known intent is used.
+		if run != nil {
+			if fresh, dbErr := e.db.GetRun(run.ID); dbErr == nil && fresh != nil && fresh.Intent != nil {
+				sctx.UserIntent = *fresh.Intent
+			}
+		}
 		outcome, err := step.Execute(sctx)
 		roundNum++
 		roundDuration := time.Since(phaseStart).Milliseconds()

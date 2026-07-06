@@ -127,6 +127,8 @@ Agents can also call `no-mistakes axi` directly:
 no-mistakes axi run --intent "the user's goal"
 no-mistakes axi status
 no-mistakes axi respond --action approve
+no-mistakes axi intent
+no-mistakes axi intent --set "the corrected intent"
 no-mistakes axi logs --step review --full
 no-mistakes axi abort
 no-mistakes axi abort --run <id>
@@ -141,6 +143,7 @@ Use `no-mistakes axi abort --run <id>` only when you need to cancel a specific a
 
 When an agent starts a new run, `--intent` is required and should describe what the user wanted to accomplish, not what files changed.
 Agents should prefer a few complete sentences over a terse summary, capturing user decisions, tradeoffs, constraints, ruled-out approaches, and explicit requests that would not be obvious from the diff alone.
+`no-mistakes axi intent` shows the intent attached to the current branch's run, and `no-mistakes axi intent --set "..."` replaces it on the active run when it turns out wrong or stale - steps that have not executed yet, and fix rounds of the step currently parked at a gate, use the edited intent.
 If the repo is on the default branch or has uncommitted changes, direct `axi run` returns a structured error with the command the agent should run instead of silently creating a branch or commit.
 Approval gates are exposed as `gate:` objects with finding IDs, severities, files, actions, descriptions, and help commands for `no-mistakes axi respond`.
 While a non-terminal run is parked at an `awaiting_approval` or `fix_review` gate, the run object also includes `awaiting_agent: parked <duration>`.

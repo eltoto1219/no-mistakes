@@ -16,6 +16,7 @@ const (
 	MethodRerun        = "rerun"
 	MethodSubscribe    = "subscribe"
 	MethodRespond      = "respond"
+	MethodSetIntent    = "set_intent"
 	MethodCancelRun    = "cancel_run"
 	MethodHealth       = "health"
 	MethodShutdown     = "shutdown"
@@ -117,6 +118,14 @@ type RespondParams struct {
 	AddedFindings []types.Finding      `json:"added_findings,omitempty"`
 }
 
+// SetIntentParams replaces the intent on an active run. The executor re-reads
+// the persisted intent before each step round, so the edit reaches subsequent
+// prompts without restarting the run.
+type SetIntentParams struct {
+	RunID  string `json:"run_id"`
+	Intent string `json:"intent"`
+}
+
 // CancelRunParams cancels an active pipeline run.
 type CancelRunParams struct {
 	RunID string `json:"run_id"`
@@ -157,6 +166,11 @@ type RerunResult struct {
 
 // RespondResult confirms the action was accepted.
 type RespondResult struct {
+	OK bool `json:"ok"`
+}
+
+// SetIntentResult confirms the intent update was accepted.
+type SetIntentResult struct {
 	OK bool `json:"ok"`
 }
 
