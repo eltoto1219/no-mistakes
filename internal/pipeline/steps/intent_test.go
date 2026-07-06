@@ -308,6 +308,49 @@ func TestIntentStep_PanicReturnsSkipped(t *testing.T) {
 	}
 }
 
+// TestIntentStep_EditDuringInferenceWins proves an explicit intent edit
+// (`axi intent --set`) that lands while transcript inference is running is
+// authoritative: the step's persist loses the if-empty write, the DB keeps the
+// edit, and the in-memory run adopts it for downstream steps.
+func TestIntentStep_EditDuringInferenceWins(t *testing.T) {
+	sctx := newIntentStepContext(t)
+	var logs []string
+	sctx.Log = func(s string) { logs = append(logs, s) }
+
+	step := &IntentStep{
+		runIntent: func(_ context.Context, sctx *pipeline.StepContext) (*intent.Result, error) {
+			// Simulate the concurrent edit arriving mid-inference.
+			if err := sctx.DB.UpdateRunIntent(sctx.Run.ID, db.RunIntent{Summary: "edited by agent", Source: "agent", Score: 1}); err != nil {
+				t.Fatalf("simulate edit: %v", err)
+			}
+			return &intent.Result{Summary: "inferred summary", AgentName: "claude", SessionID: "s-1", Score: 0.9}, nil
+		},
+	}
+
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if outcome == nil || outcome.Skipped {
+		t.Fatalf("expected non-skipped outcome, got %+v", outcome)
+	}
+
+	persisted, err := sctx.DB.GetRun(sctx.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if persisted.Intent == nil || *persisted.Intent != "edited by agent" {
+		t.Errorf("db intent = %v, want the edit to win over inference", persisted.Intent)
+	}
+	if sctx.Run.Intent == nil || *sctx.Run.Intent != "edited by agent" {
+		t.Errorf("in-memory run.Intent = %v, want the edited intent", sctx.Run.Intent)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "keeping the supplied intent") {
+		t.Errorf("expected a log line about keeping the supplied intent, got:\n%s", joined)
+	}
+}
+
 func TestIntentStep_UsesSuppliedIntent(t *testing.T) {
 	sctx := newIntentStepContext(t)
 	supplied := "agent-supplied: add retry to the uploader"

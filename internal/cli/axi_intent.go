@@ -26,10 +26,17 @@ func newAxiIntentCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			editing := cmd.Flags().Changed("set")
 			return trackAxiSurface("axi-intent", "/axi/intent", telemetry.Fields{
-				"has_set": strings.TrimSpace(set) != "",
+				"has_set": editing,
 			}, func() error {
-				return runAxiIntent(cmd, set)
+				// An explicitly supplied blank --set is a usage error, not a
+				// silent fallback to the read path.
+				if editing && strings.TrimSpace(set) == "" {
+					return emitError(cmd, 2, "--set requires a non-empty intent",
+						`Pass the corrected intent: no-mistakes axi intent --set "<what the user set out to accomplish>"`)
+				}
+				return runAxiIntent(cmd, editing, strings.TrimSpace(set))
 			})
 		},
 	}
@@ -37,9 +44,8 @@ func newAxiIntentCmd() *cobra.Command {
 	return cmd
 }
 
-func runAxiIntent(cmd *cobra.Command, set string) error {
+func runAxiIntent(cmd *cobra.Command, editing bool, set string) error {
 	ctx := cmd.Context()
-	editing := strings.TrimSpace(set) != ""
 
 	env, err := openAxiEnv(editing)
 	if err != nil {
@@ -50,7 +56,7 @@ func runAxiIntent(cmd *cobra.Command, set string) error {
 	branch := currentBranchForRunResolve(ctx)
 
 	if editing {
-		return runAxiIntentSet(cmd, env, branch, strings.TrimSpace(set))
+		return runAxiIntentSet(cmd, env, branch, set)
 	}
 
 	run, err := resolveRun(env, "", branch)

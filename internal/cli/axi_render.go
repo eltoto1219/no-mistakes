@@ -322,6 +322,7 @@ func gateFields(gate stepView) []toon.Field {
 			"Run `no-mistakes axi respond --action approve` to accept this step and continue",
 			"Run `no-mistakes axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself)",
 			"Run `no-mistakes axi respond --action skip` to skip this step",
+			`Run ` + "`" + `no-mistakes axi intent --set "..."` + "`" + ` first if the run's intent is wrong or stale - later steps and fix rounds use the corrected intent`,
 			fmt.Sprintf("Run `no-mistakes axi logs --step %s --full` to read the full step log", gate.Name),
 			"A long-running call is working, not stalled - background it if your harness needs to, but the run never advances past a gate on its own. Read every return; on a `gate:`, respond; loop until an `outcome:`.",
 		}},

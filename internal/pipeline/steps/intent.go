@@ -130,15 +130,31 @@ func (s *IntentStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.Step
 	score = result.Score
 	outcomeLabel = "matched"
 
-	if dbErr := sctx.DB.UpdateRunIntent(sctx.Run.ID, db.RunIntent{
+	// Persist only if the run still has no intent: transcript inference takes
+	// long enough that an explicit edit (`axi intent --set`) can land while it
+	// runs, and the edit is authoritative. When the write loses, adopt the
+	// edited intent instead of the inferred one.
+	won, dbErr := sctx.DB.UpdateRunIntentIfEmpty(sctx.Run.ID, db.RunIntent{
 		Summary:   result.Summary,
 		Source:    result.AgentName,
 		SessionID: result.SessionID,
 		Score:     result.Score,
-	}); dbErr != nil {
+	})
+	if dbErr != nil {
 		slog.Warn("intent: persist failed", "run_id", sctx.Run.ID, "error", dbErr)
 		sctx.Log(fmt.Sprintf("intent matched but failed to persist: %v", dbErr))
 		return &pipeline.StepOutcome{Skipped: true}, nil
+	}
+	if !won {
+		outcomeLabel = "superseded_by_edit"
+		if fresh, freshErr := sctx.DB.GetRun(sctx.Run.ID); freshErr == nil && fresh != nil && fresh.Intent != nil {
+			sctx.Run.Intent = fresh.Intent
+			sctx.Run.IntentSource = fresh.IntentSource
+			sctx.Run.IntentSessionID = fresh.IntentSessionID
+			sctx.Run.IntentScore = fresh.IntentScore
+		}
+		sctx.Log("an intent was supplied while inference ran; keeping the supplied intent")
+		return &pipeline.StepOutcome{}, nil
 	}
 
 	summaryCopy := result.Summary

@@ -210,17 +210,18 @@ func TestSetIntentEditsActiveRun(t *testing.T) {
 	}
 	waitForRunTerminalState(t, d, runID)
 
-	// The executor is removed from the manager shortly after the run's DB
-	// status flips terminal, so poll until the edit is rejected.
-	deadline = time.Now().Add(5 * time.Second)
-	for {
-		if err := client.Call(ipc.MethodSetIntent, &ipc.SetIntentParams{RunID: runID, Intent: "too late"}, &setResult); err != nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("set_intent on a finished run kept succeeding, want error")
-		}
-		time.Sleep(50 * time.Millisecond)
+	// The write is conditional on the run still being non-terminal, so the
+	// edit is rejected immediately once the terminal status is persisted -
+	// even while the executor is still registered during cleanup.
+	if err := client.Call(ipc.MethodSetIntent, &ipc.SetIntentParams{RunID: runID, Intent: "too late"}, &setResult); err == nil {
+		t.Error("set_intent on a finished run succeeded, want error")
+	}
+	run, err = d.GetRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Intent == nil || *run.Intent != "edited intent" {
+		t.Fatalf("runs.intent after finished-run edit attempt = %v, want %q", run.Intent, "edited intent")
 	}
 }
 

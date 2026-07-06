@@ -585,7 +585,10 @@ func (m *RunManager) HandleRespondWithOverrides(runID string, step types.StepNam
 // columns as an agent-supplied intent; the executor re-reads the persisted
 // intent before each step round, so the edit reaches the current step's next
 // round and every later step without restarting the run. Only active runs can
-// be edited: on a finished run the intent has already been consumed.
+// be edited: on a finished run the intent has already been consumed. The
+// executor-presence check alone is racy (the executor is deregistered slightly
+// after the run's terminal DB transition during cleanup), so the write itself
+// is conditional on the run still being non-terminal.
 func (m *RunManager) HandleSetIntent(runID, intent string) error {
 	trimmed := strings.TrimSpace(intent)
 	if trimmed == "" {
@@ -599,7 +602,14 @@ func (m *RunManager) HandleSetIntent(runID, intent string) error {
 		return fmt.Errorf("no active run %s", runID)
 	}
 
-	return m.db.UpdateRunIntent(runID, db.RunIntent{Summary: trimmed, Source: "agent", Score: 1})
+	updated, err := m.db.UpdateRunIntentIfActive(runID, db.RunIntent{Summary: trimmed, Source: "agent", Score: 1})
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return fmt.Errorf("no active run %s", runID)
+	}
+	return nil
 }
 
 // Shutdown cancels all active runs. Called during daemon shutdown to prevent

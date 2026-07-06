@@ -33,6 +33,75 @@ func TestRunInsertAndGet(t *testing.T) {
 	}
 }
 
+func TestUpdateRunIntentIfActive(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	run, err := d.InsertRun(repo.ID, "feature", "abc123", "def456")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	updated, err := d.UpdateRunIntentIfActive(run.ID, RunIntent{Summary: "edited", Source: "agent", Score: 1})
+	if err != nil {
+		t.Fatalf("update intent if active: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected update on a pending run")
+	}
+	got, _ := d.GetRun(run.ID)
+	if got.Intent == nil || *got.Intent != "edited" {
+		t.Fatalf("intent = %v, want edited", got.Intent)
+	}
+
+	// Once the run is terminal, the conditional write must refuse and leave
+	// the stored intent untouched.
+	if err := d.UpdateRunStatus(run.ID, types.RunCompleted); err != nil {
+		t.Fatalf("complete run: %v", err)
+	}
+	updated, err = d.UpdateRunIntentIfActive(run.ID, RunIntent{Summary: "too late", Source: "agent", Score: 1})
+	if err != nil {
+		t.Fatalf("update intent if active (terminal): %v", err)
+	}
+	if updated {
+		t.Fatal("expected no update on a completed run")
+	}
+	got, _ = d.GetRun(run.ID)
+	if got.Intent == nil || *got.Intent != "edited" {
+		t.Fatalf("intent after terminal edit attempt = %v, want edited", got.Intent)
+	}
+}
+
+func TestUpdateRunIntentIfEmpty(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	run, err := d.InsertRun(repo.ID, "feature", "abc123", "def456")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	won, err := d.UpdateRunIntentIfEmpty(run.ID, RunIntent{Summary: "inferred", Source: "claude", Score: 0.8})
+	if err != nil {
+		t.Fatalf("update intent if empty: %v", err)
+	}
+	if !won {
+		t.Fatal("expected the write to win on a run with no intent")
+	}
+
+	// A second inferred write must lose to the value already present (an
+	// explicit edit behaves the same way).
+	won, err = d.UpdateRunIntentIfEmpty(run.ID, RunIntent{Summary: "second inference", Source: "claude", Score: 0.9})
+	if err != nil {
+		t.Fatalf("update intent if empty (occupied): %v", err)
+	}
+	if won {
+		t.Fatal("expected the write to lose when an intent is already set")
+	}
+	got, _ := d.GetRun(run.ID)
+	if got.Intent == nil || *got.Intent != "inferred" {
+		t.Fatalf("intent = %v, want inferred", got.Intent)
+	}
+}
+
 func TestRunAwaitingAgentSetAndClear(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
