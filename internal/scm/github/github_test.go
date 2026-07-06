@@ -425,6 +425,44 @@ func TestGetChecksLegacyStructuredReturnsEmptyWhenNoChecksExist(t *testing.T) {
 	}
 }
 
+func TestDecodeLegacyCheckRunsRejectsMissingOrNullArray(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		"null\n",
+		"{}\n",
+		`{"check_runs":null}` + "\n",
+		`{"check_runs":[]}` + "\n{}\n",
+	} {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			if _, err := decodeLegacyCheckRuns([]byte(input)); err == nil {
+				t.Fatal("decodeLegacyCheckRuns() error = nil, want malformed response error")
+			}
+		})
+	}
+}
+
+func TestDecodeLegacyCommitStatusesRejectsMissingOrNullArray(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		"null\n",
+		"{}\n",
+		`{"statuses":null}` + "\n",
+		`{"statuses":[]}` + "\n{}\n",
+	} {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			if _, err := decodeLegacyCommitStatuses([]byte(input)); err == nil {
+				t.Fatal("decodeLegacyCommitStatuses() error = nil, want malformed response error")
+			}
+		})
+	}
+}
+
 func TestGetChecksLegacyStructuredFailsClosedOnCommandError(t *testing.T) {
 	t.Parallel()
 

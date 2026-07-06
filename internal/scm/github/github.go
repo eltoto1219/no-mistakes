@@ -455,48 +455,42 @@ func (h *Host) apiArgs(endpoint string, extra ...string) []string {
 }
 
 func decodeLegacyCheckRuns(out []byte) ([]legacyCheckRun, error) {
-	decoder := json.NewDecoder(bytes.NewReader(out))
-	var runs []legacyCheckRun
-	seenPayload := false
-	for {
-		var payload struct {
-			CheckRuns []legacyCheckRun `json:"check_runs"`
-		}
-		err := decoder.Decode(&payload)
-		if errors.Is(err, io.EOF) {
-			if !seenPayload {
-				return nil, errors.New("parse check-runs: empty response")
-			}
-			return runs, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("parse check-runs: %w", err)
-		}
-		seenPayload = true
-		runs = append(runs, payload.CheckRuns...)
-	}
+	return decodeLegacyPages[legacyCheckRun](out, "check_runs", "check-runs")
 }
 
 func decodeLegacyCommitStatuses(out []byte) ([]legacyCommitStatus, error) {
+	return decodeLegacyPages[legacyCommitStatus](out, "statuses", "commit statuses")
+}
+
+func decodeLegacyPages[T any](out []byte, field, label string) ([]T, error) {
 	decoder := json.NewDecoder(bytes.NewReader(out))
-	var statuses []legacyCommitStatus
+	var values []T
 	seenPayload := false
 	for {
-		var payload struct {
-			Statuses []legacyCommitStatus `json:"statuses"`
-		}
+		var payload map[string]json.RawMessage
 		err := decoder.Decode(&payload)
 		if errors.Is(err, io.EOF) {
 			if !seenPayload {
-				return nil, errors.New("parse commit statuses: empty response")
+				return nil, fmt.Errorf("parse %s: empty response", label)
 			}
-			return statuses, nil
+			return values, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("parse commit statuses: %w", err)
+			return nil, fmt.Errorf("parse %s: %w", label, err)
+		}
+		raw, ok := payload[field]
+		if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, fmt.Errorf("parse %s: missing %s array", label, field)
+		}
+		var page []T
+		if err := json.Unmarshal(raw, &page); err != nil || page == nil {
+			if err == nil {
+				err = errors.New("expected array")
+			}
+			return nil, fmt.Errorf("parse %s: invalid %s: %w", label, field, err)
 		}
 		seenPayload = true
-		statuses = append(statuses, payload.Statuses...)
+		values = append(values, page...)
 	}
 }
 
