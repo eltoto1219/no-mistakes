@@ -85,6 +85,16 @@ ci_timeout: "168h"  # any Go duration string, or an unlimited keyword
 # Daemon log verbosity.
 log_level: info  # debug | info | warn | error
 
+# Optional commit-message template for commits the pipeline creates when applying fixes.
+# Fields: {{.Step}} (review | test | lint | document | ci | push) and {{.Summary}}.
+# Unset keeps the built-in default messages.
+# commit:
+#   fix_message: "chore({{.Step}}): {{.Summary}}"
+
+# Include the "Updates from git push no-mistakes" attribution line in PR bodies.
+# Set to false to keep PR bodies free of no-mistakes references.
+# pr_signature: true
+
 # Max follow-up auto-fix attempts per step. 0 = disabled after the initial step pass.
 # Document fixes are attempted during the initial document pass.
 auto_fix:
